@@ -1,3 +1,4 @@
+import logging
 import time
 from datetime import datetime
 from pathlib import Path
@@ -16,6 +17,9 @@ from blink_call.modules.i18n import get_i18n
 from blink_call.modules.setting.setting_model import SettingModel
 from blink_call.modules.setting.setting_viewmodel import SettingViewModel
 from blink_call.utils.debug_overlay import draw_debug
+
+
+audio_logger = logging.getLogger("blink_call.audio")
 
 
 class HomeViewModel(QObject):
@@ -214,7 +218,7 @@ class HomeViewModel(QObject):
         )
         if bool(result.get("blinck_call_flag")):
             self.start_or_reset_call_audio()
-        if bool(result.get("stage_sound_prompt_flag")):
+        elif bool(result.get("stage_sound_prompt_flag")):
             self.play_stage_prompt_sound()
 
     def on_infer_debug(self, text: str):
@@ -308,6 +312,7 @@ class HomeViewModel(QObject):
         volume = int(self.setting_vm.get_config("blink_call.audio.volume"))
         volume = max(0, min(100, volume))
         self.stage_prompt_sound_player.set_volume(float(volume) / 100.0)
+        audio_logger.info("stage_prompt_requested")
         self.stage_prompt_sound_player.play()
 
     def start_recording(self):

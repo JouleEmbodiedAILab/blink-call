@@ -1,7 +1,11 @@
+import logging
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QTimer, QUrl, Signal
 from PySide6.QtMultimedia import QMediaDevices, QSoundEffect
+
+
+audio_logger = logging.getLogger("blink_call.audio")
 
 
 class RecoveringSoundEffect(QObject):
@@ -55,6 +59,10 @@ class RecoveringSoundEffect(QObject):
             self._effect.setVolume(self._volume)
 
     def play(self):
+        if self._pending_play:
+            self._emit_diagnostic(f"play_coalesced; request={self._request_id}")
+            return
+
         self._request_id += 1
         request_id = self._request_id
         self._pending_play = True
@@ -65,6 +73,7 @@ class RecoveringSoundEffect(QObject):
 
         if not self.source_path.is_file():
             self._pending_play = False
+            audio_logger.warning("stage_prompt_failed reason=source_missing source=%s", self.source_path)
             self._emit_diagnostic(f"play_skipped; reason=source_missing; source={self.source_path}")
             return
 
@@ -165,6 +174,7 @@ class RecoveringSoundEffect(QObject):
         self._awaiting_start = False
         self._retry_scheduled = False
         self._loading_wait_key = None
+        audio_logger.info("stage_prompt_started request=%s generation=%s", request_id, self._generation)
         self._emit_diagnostic(f"play_started; request={request_id}; generation={self._generation}")
 
     def _wait_for_loading(self, effect, generation: int, request_id: int):
@@ -194,6 +204,13 @@ class RecoveringSoundEffect(QObject):
             self._pending_play = False
             self._awaiting_start = False
             self._loading_wait_key = None
+            audio_logger.warning(
+                "stage_prompt_failed request=%s reason=%s attempts=%s source=%s",
+                request_id,
+                reason,
+                self._retry_attempt,
+                self.source_path,
+            )
             self._emit_diagnostic(
                 f"play_failed; request={request_id}; reason={reason}; "
                 f"attempts={self._retry_attempt}; source={self.source_path}"
