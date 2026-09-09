@@ -13,9 +13,9 @@
   </p>
 </div>
 
-<p align="center">
-  <img width="800" src="user_manual/docs/images/quick-start-call-alert.gif" alt="按照眨眼序列触发呼叫提醒的演示"/>
-</p>
+
+<video src="https://github.com/user-attachments/assets/2579037f-2dea-4fcf-aa7d-e905464cd1be" width="800" controls
+  playsinline></video>
 
 ## 这款软件能做什么
 
