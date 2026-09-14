@@ -24,6 +24,13 @@ class ConfigBinder:
         combo.currentIndexChanged.connect(on_changed)
 
     @staticmethod
+    def bind_checkbox(vm, checkbox, path: str):
+        def on_changed(checked):
+            vm.set_config(path, bool(checked))
+
+        checkbox.toggled.connect(on_changed)
+
+    @staticmethod
     def bind_spinbox(vm, spinbox, path: str):
         def on_changed(value: int):
             vm.set_config(path, int(value))

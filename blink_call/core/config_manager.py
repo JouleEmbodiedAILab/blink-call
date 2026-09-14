@@ -19,6 +19,7 @@ class ConfigManager:
                 "remote": {"ip": "0.0.0.0", "port": 17925},
             },
             "local_service": {"camera_id": 0, "port": 17925},
+            "startup": {"enabled": False},
             "recording": {"max_duration_min": 1, "local_dir": default_log_dir},
             "blink_call": {
                 "enabled": True,

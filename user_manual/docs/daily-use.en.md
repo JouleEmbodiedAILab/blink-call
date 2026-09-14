@@ -39,3 +39,11 @@ After the call is triggered, the software will play an alert sound and show the 
 To stop it early, click the stop button on the call alert screen.
 
 ![Blink call](https://cdn.jsdelivr.net/gh/JouleEmbodiedAILab/blink-call@main/user_manual/docs/images/quick-start-call-alert.jpg)
+
+## Start Automatically and Use the System Tray
+
+In **Settings → General**, enable **Start automatically at login** and save the settings. Windows will use Task Scheduler to start BlinkCall when any user logs on.
+
+After startup, BlinkCall remains available in the system tray. Closing the window hides it to the tray; right-click the tray icon to show the window again or exit the application.
+
+To disable automatic startup, clear **Start automatically at login** and save the settings.

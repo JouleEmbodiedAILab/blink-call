@@ -1,5 +1,6 @@
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QFrame,
     QHBoxLayout,
@@ -72,6 +73,22 @@ class GeneralPage:
         theme_row.addStretch()
         theme_row.addWidget(self.theme_combo)
         layout.addLayout(theme_row)
+
+        layout.addWidget(HDividerLine())
+
+        autostart_row = QHBoxLayout()
+        autostart_row.setSpacing(16)
+        self.autostart_label = QLabel("Start automatically")
+        self.autostart_label.setObjectName("settingSubSectionTitle")
+        self.autostart_checkbox = QCheckBox("Enable")
+        self.autostart_checkbox.setFixedWidth(220)
+        self.autostart_status_label = QLabel("")
+        self.autostart_status_label.setWordWrap(True)
+        autostart_row.addWidget(self.autostart_label)
+        autostart_row.addStretch()
+        autostart_row.addWidget(self.autostart_checkbox)
+        autostart_row.addWidget(self.autostart_status_label)
+        layout.addLayout(autostart_row)
 
         layout.addWidget(HDividerLine())
         layout.addStretch()

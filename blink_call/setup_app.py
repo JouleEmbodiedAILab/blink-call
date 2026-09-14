@@ -12,6 +12,7 @@ from blink_call.core.navigation import Navigation
 from blink_call.core.theme_manager import ThemeManager
 from blink_call.main_window import MainWindow
 from blink_call.modules import MODULES_REGISTRY
+from blink_call.utils.resource_path import get_resource_path
 
 
 def create_page(name, main_window, nav):
@@ -30,7 +31,7 @@ def create_page(name, main_window, nav):
 
 def create_app():
     app = QApplication(sys.argv)
-    app.setWindowIcon(QIcon("assets/icons/eye.png"))
+    app.setWindowIcon(QIcon(str(get_resource_path("assets", "icons", "eye.png"))))
 
     app_data_dir = QStandardPaths.writableLocation(QStandardPaths.AppDataLocation)
     if not app_data_dir:
@@ -38,7 +39,7 @@ def create_app():
     configure_app_logging(Path(app_data_dir) / "blink_call" / "logs")
 
     # Load theme
-    theme = ThemeManager(app)
+    theme = ThemeManager(app, qss_dir=str(get_resource_path("assets", "qss")))
     ui_config = ConfigManager.get_local_config().get("ui") or {}
     theme_name = str(ui_config.get("theme") or "light").strip().lower()
     if theme_name not in {"light", "dark"}:
@@ -59,10 +60,16 @@ def create_app():
     # Default page
     nav.to("home")
 
+    if main_window.tray_available:
+        app.setQuitOnLastWindowClosed(False)
+
     return app, main_window
 
 
 if __name__ == "__main__":
     app, window = create_app()
-    window.show()
+    if "--background" in app.arguments() and window.tray_available:
+        window.hide()
+    else:
+        window.show()
     sys.exit(app.exec())
