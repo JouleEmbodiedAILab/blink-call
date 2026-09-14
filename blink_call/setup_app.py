@@ -12,7 +12,7 @@ from blink_call.core.navigation import Navigation
 from blink_call.core.theme_manager import ThemeManager
 from blink_call.main_window import MainWindow
 from blink_call.modules import MODULES_REGISTRY
-from blink_call.utils.resource_path import get_resource_path
+from blink_call.core.resource_path import get_resource_path
 
 
 def create_page(name, main_window, nav):

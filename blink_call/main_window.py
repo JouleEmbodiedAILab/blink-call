@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
 
 from blink_call.core.config_manager import ConfigManager
 from blink_call.modules.i18n import get_i18n
-from blink_call.utils.resource_path import get_resource_path
+from blink_call.core.resource_path import get_resource_path
 
 
 class MainWindow(QWidget):
