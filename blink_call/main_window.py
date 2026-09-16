@@ -28,6 +28,7 @@ class MainWindow(QWidget):
         self.stack = QStackedWidget()
         self.views = {}
         self._allow_close = False
+        self._user_requested_exit = False
         self.tray_icon = None
         self.tray_show_action = None
         self.tray_exit_action = None
@@ -89,6 +90,11 @@ class MainWindow(QWidget):
     def tray_available(self):
         return self.tray_icon is not None
 
+    @property
+    def user_requested_exit(self):
+        """Whether the user deliberately selected the tray's Exit action."""
+        return self._user_requested_exit
+
     def _setup_system_tray(self):
         if not QSystemTrayIcon.isSystemTrayAvailable():
             return
@@ -120,6 +126,7 @@ class MainWindow(QWidget):
         self.activateWindow()
 
     def exit_application(self):
+        self._user_requested_exit = True
         self._allow_close = True
         self.close()
         application = QApplication.instance()

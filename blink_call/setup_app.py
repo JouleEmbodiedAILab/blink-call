@@ -1,6 +1,16 @@
 import sys
 from pathlib import Path
 
+from blink_call.core.windows_watchdog import (
+    WATCHDOG_SERVICE_ARGUMENT,
+    WATCHDOG_SUPERVISED_ARGUMENT,
+    WATCHDOG_USER_EXIT_CODE,
+    run_watchdog_service,
+)
+
+if __name__ == "__main__" and WATCHDOG_SERVICE_ARGUMENT in sys.argv:
+    sys.exit(run_watchdog_service())
+
 from PySide6.QtCore import QStandardPaths
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication
@@ -72,4 +82,7 @@ if __name__ == "__main__":
         window.hide()
     else:
         window.show()
-    sys.exit(app.exec())
+    exit_code = app.exec()
+    if WATCHDOG_SUPERVISED_ARGUMENT in app.arguments() and window.user_requested_exit:
+        exit_code = WATCHDOG_USER_EXIT_CODE
+    sys.exit(exit_code)

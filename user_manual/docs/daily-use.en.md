@@ -42,7 +42,7 @@ To stop it early, click the stop button on the call alert screen.
 
 ## Start Automatically and Use the System Tray
 
-In **Settings → General**, enable **Start automatically at login** and save the settings. Windows will use Task Scheduler to start BlinkCall when any user logs on.
+In **Settings → General**, enable **Start automatically at login** and save the settings. BlinkCall registers a Windows watchdog service that starts the app in each active user session and restarts it after an unexpected exit or forced termination. Enabling or disabling this feature requires running BlinkCall as an administrator.
 
 After startup, BlinkCall remains available in the system tray. Closing the window hides it to the tray; right-click the tray icon to show the window again or exit the application.
 

@@ -71,6 +71,14 @@ class GeneralController:
         if ok:
             return
 
+        # The settings model is saved before this signal is emitted. Restore
+        # the previous persisted value when Windows rejects service setup.
+        self.vm.set_config("startup.enabled", not enabled)
+        self.vm.model.save_config()
+        self.page.autostart_checkbox.blockSignals(True)
+        self.page.autostart_checkbox.setChecked(not enabled)
+        self.page.autostart_checkbox.blockSignals(False)
+
         i18n = get_i18n(self.vm.get_config("ui.language"))
         QMessageBox.warning(
             self.setting_view,
