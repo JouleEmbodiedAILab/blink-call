@@ -156,6 +156,8 @@ logs/
 # VSCode
 .vscode/
 
+# Local Windows watchdog chaos/recovery test (not versioned)
+scripts/windows/test_watchdog_recovery.ps1
 # Custom
 configs/local_config.yaml
 user_manual/site/

@@ -275,10 +275,22 @@ class WindowsWatchdogManager:
 
     @classmethod
     def _service_command(cls) -> str | None:
-        executable = Path(sys.executable).resolve()
-        if not (getattr(sys, "frozen", False) or executable.name.lower() == "blinkcall.exe"):
-            return None
-        return subprocess.list2cmdline([str(executable), WATCHDOG_SERVICE_ARGUMENT])
+        # Nuitka may retain the build interpreter in ``sys.executable`` even
+        # when the application was launched through the standalone executable.
+        # ``sys.argv[0]`` is the actual launcher in that case.  Only accept the
+        # expected packaged image name so a source/Python invocation can never
+        # register a service pointing at a development interpreter.
+        executable_candidates = [sys.argv[0] if sys.argv else "", sys.executable]
+        for candidate in executable_candidates:
+            if not candidate:
+                continue
+            try:
+                executable = Path(candidate).resolve()
+            except (OSError, RuntimeError):
+                continue
+            if executable.name.casefold() == "blinkcall.exe":
+                return subprocess.list2cmdline([str(executable), WATCHDOG_SERVICE_ARGUMENT])
+        return None
 
     @staticmethod
     def _is_elevated() -> bool:
