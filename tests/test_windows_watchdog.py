@@ -21,6 +21,11 @@ class WindowsWatchdogTests(unittest.TestCase):
 
         self.assertTrue(WindowsWatchdogManager._legacy_task_not_found(result))
 
+    def test_localized_legacy_task_not_found_is_not_an_error(self):
+        result = SimpleNamespace(stdout="", stderr="错误：系统找不到指定的文件。")
+
+        self.assertTrue(WindowsWatchdogManager._legacy_task_not_found(result))
+
     def test_service_already_running_detection(self):
         result = SimpleNamespace(stdout="[SC] StartService FAILED 1056", stderr="")
 

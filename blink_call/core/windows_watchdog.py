@@ -12,6 +12,7 @@ from __future__ import annotations
 import ctypes
 from ctypes import wintypes
 from dataclasses import dataclass
+import locale
 import logging
 from logging.handlers import RotatingFileHandler
 import os
@@ -319,7 +320,7 @@ class WindowsWatchdogManager:
             [sc, *arguments],
             capture_output=True,
             text=True,
-            encoding="utf-8",
+            encoding=_system_command_encoding(),
             errors="replace",
             check=False,
             creationflags=creation_flags,
@@ -336,7 +337,7 @@ class WindowsWatchdogManager:
                 [command, "/Delete", "/TN", cls.LEGACY_TASK_NAME, "/F"],
                 capture_output=True,
                 text=True,
-                encoding="utf-8",
+                encoding=_system_command_encoding(),
                 errors="replace",
                 check=False,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
@@ -840,6 +841,13 @@ def _configure_service_logging() -> logging.Logger:
     except OSError:
         service_logger.addHandler(logging.NullHandler())
     return service_logger
+
+
+def _system_command_encoding() -> str:
+    """Decode Windows built-in command output using the local code page."""
+    if sys.platform == "win32":
+        return locale.getpreferredencoding(False)
+    return "utf-8"
 
 
 def _win_error(operation: str) -> OSError:

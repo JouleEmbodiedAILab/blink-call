@@ -12,7 +12,7 @@ if (-not (Get-Command conda -ErrorAction SilentlyContinue)) {
     exit 1
 }
 
-function Invoke-Conda {
+function Invoke-BlinkCallConda {
     param(
         [Parameter(Mandatory = $true)]
         [string[]]$Args
@@ -32,24 +32,15 @@ $EnvPattern = "^\s*" + [Regex]::Escape($Name) + "\s"
 $EnvExists = conda env list | Select-String -Pattern $EnvPattern
 if (-not $EnvExists) {
     Write-Host "Creating conda environment '$Name' with Python 3.10..."
-    Invoke-Conda -Args @("create", "-y", "-n", $Name, "python=3.10")
+    Invoke-BlinkCallConda -Args @("create", "-y", "-n", $Name, "python=3.10")
 } else {
     Write-Host "Conda environment '$Name' already exists. Skipping creation."
 }
 
 Write-Host "Installing project dependencies..."
-Invoke-Conda -Args @("run", "-n", $Name, "python", "-m", "pip", "install", "--upgrade", "pip")
-
-$InsightfacePkgDir = Join-Path $ProjectRoot "third_party\insightface\python-package"
-if (-not (Test-Path $InsightfacePkgDir)) {
-    Write-Error "Missing directory: $InsightfacePkgDir`nPlease initialize submodules: git submodule update --init --recursive"
-    exit 1
-}
-
-Invoke-Conda -Args @("run", "-n", $Name, "python", "-m", "pip", "install", "-e", $InsightfacePkgDir)
-
-Invoke-Conda -Args @("run", "-n", $Name, "--cwd", $ProjectRoot, "python", "-m", "pip", "install", "-e", ".")
-Invoke-Conda -Args @("run", "-n", $Name, "--cwd", $ProjectRoot, "pre-commit", "install")
+Invoke-BlinkCallConda -Args @("run", "-n", $Name, "python", "-m", "pip", "install", "--upgrade", "pip")
+Invoke-BlinkCallConda -Args @("run", "-n", $Name, "--cwd", $ProjectRoot, "python", "-m", "pip", "install", "-e", ".")
+Invoke-BlinkCallConda -Args @("run", "-n", $Name, "--cwd", $ProjectRoot, "pre-commit", "install")
 
 Write-Host "Setup completed successfully in conda environment '$Name'."
 Write-Host "To activate your environment, run: conda activate $Name"
