@@ -281,6 +281,14 @@ class WindowsWatchdogManager:
         # ``sys.argv[0]`` is the actual launcher in that case.  Only accept the
         # expected packaged image name so a source/Python invocation can never
         # register a service pointing at a development interpreter.
+        executable = cls._packaged_executable()
+        if executable is None:
+            return None
+        return subprocess.list2cmdline([str(executable), WATCHDOG_SERVICE_ARGUMENT])
+
+    @staticmethod
+    def _packaged_executable() -> Path | None:
+        """Return the standalone BlinkCall executable, if this is one."""
         executable_candidates = [sys.argv[0] if sys.argv else "", sys.executable]
         for candidate in executable_candidates:
             if not candidate:
@@ -290,7 +298,7 @@ class WindowsWatchdogManager:
             except (OSError, RuntimeError):
                 continue
             if executable.name.casefold() == "blinkcall.exe":
-                return subprocess.list2cmdline([str(executable), WATCHDOG_SERVICE_ARGUMENT])
+                return executable
         return None
 
     @staticmethod
@@ -400,7 +408,13 @@ class WindowsWatchdogService:
         self._control_callback = None
         self._logger = _configure_service_logging()
 
-        executable = Path(sys.executable).resolve()
+        # In a Nuitka standalone build ``sys.executable`` can still point to
+        # the Python interpreter used to create the build.  A service started
+        # from BlinkCall.exe must relaunch that executable in the interactive
+        # session, not that interpreter without an application script.
+        executable = WindowsWatchdogManager._packaged_executable()
+        if executable is None:
+            executable = Path(sys.argv[0] if sys.argv else sys.executable).resolve()
         self._app_command = [
             str(executable),
             "--background",
