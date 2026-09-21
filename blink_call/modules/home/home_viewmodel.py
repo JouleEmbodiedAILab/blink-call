@@ -6,8 +6,9 @@ from pathlib import Path
 import cv2
 from PySide6.QtCore import QObject, QTimer, QUrl, Signal
 from PySide6.QtGui import QImage
-from PySide6.QtMultimedia import QSoundEffect
+from PySide6.QtMultimedia import QMediaDevices, QSoundEffect
 
+from blink_call.core.audio_status_logging import configure_audio_status_logging, log_audio_status
 from blink_call.core.inference_worker import InferenceWorker
 from blink_call.core.model_files_manager import ModelFilesManager
 from blink_call.core.recovering_sound_effect import RecoveringSoundEffect
@@ -45,6 +46,9 @@ class HomeViewModel(QObject):
         self.setting_vm.save_setting.connect(self.on_page_enter)
         self.setting_vm.start_local_service.connect(self.on_start_service)
         self.setting_vm.start_recording_requested.connect(self.start_recording)
+        # Configure diagnostics before creating any audio player so creation
+        # and initial device state are included in an enabled debug session.
+        self._initialize_vars()
 
         self.infer_worker = InferenceWorker(self.model)
         self.infer_worker.result_ready.connect(self.on_infer_result)
@@ -57,6 +61,11 @@ class HomeViewModel(QObject):
 
         self.call_sound_effect = QSoundEffect(self)
         self.call_sound_effect.setLoopCount(int(QSoundEffect.Loop.Infinite.value))
+        self.call_sound_effect.statusChanged.connect(self._on_call_audio_status_changed)
+        self.call_sound_effect.loadedChanged.connect(self._on_call_audio_loaded_changed)
+        self.call_sound_effect.playingChanged.connect(self._on_call_audio_playing_changed)
+        self.audio_media_devices = QMediaDevices(self)
+        self.audio_media_devices.audioOutputsChanged.connect(self._on_audio_outputs_changed)
         self.stage_prompt_sound_player = RecoveringSoundEffect(
             get_resource_path("assets", "audio", "prompt.wav"),
             self,
@@ -66,10 +75,15 @@ class HomeViewModel(QObject):
         self.call_sound_stop_timer.setSingleShot(True)
         self.call_sound_stop_timer.timeout.connect(self.stop_call_audio)
 
-        self._initialize_vars()
+        self._record_call_audio_state("player_initialized")
+        self._record_audio_outputs("outputs_initialized")
 
     def _initialize_vars(self):
         self.debug_mode = bool(self.setting_vm.get_config("debug_mode"))
+        self.audio_status_log_path = configure_audio_status_logging(
+            self.setting_vm.get_config("debug_log.local_dir") or str(Path.home() / "Desktop"),
+            enabled=self.debug_mode,
+        )
         self.latest_infer_result = None
 
         self.stat_fps_interval = 10.0
@@ -93,6 +107,7 @@ class HomeViewModel(QObject):
 
     def on_page_enter(self):
         self._initialize_vars()
+        self._record_audio_outputs("debug_session_started")
         self.stop_call_audio()
         self.stage_prompt_sound_player.stop()
         self.close_recording_writer()
@@ -264,15 +279,19 @@ class HomeViewModel(QObject):
             self.infer_worker.wait()
 
     def start_or_reset_call_audio(self):
-        if (
-            self.setting_popup
-            or not bool(self.setting_vm.get_config("blink_call.enabled"))
-            or not bool(self.setting_vm.get_config("blink_call.audio.enabled"))
-        ):
+        if self.setting_popup:
+            log_audio_status("call_alert", "play_skipped", reason="settings_open")
+            return
+        if not bool(self.setting_vm.get_config("blink_call.enabled")):
+            log_audio_status("call_alert", "play_skipped", reason="blink_call_disabled")
+            return
+        if not bool(self.setting_vm.get_config("blink_call.audio.enabled")):
+            log_audio_status("call_alert", "play_skipped", reason="audio_disabled")
             return
 
         file_name = self.setting_vm.get_config("blink_call.audio.file")
         if not isinstance(file_name, str) or not file_name.strip():
+            log_audio_status("call_alert", "play_skipped", reason="audio_file_not_configured")
             return
         audio_path = Path("assets") / "audio" / file_name
 
@@ -288,32 +307,109 @@ class HomeViewModel(QObject):
         # If already playing the same source, only reset countdown; do not replay/stack.
         if not self.is_call_audio_playing or source_changed:
             self.call_sound_effect.stop()
+            log_audio_status(
+                "call_alert",
+                "play_requested",
+                source=audio_path.resolve(),
+                source_exists=audio_path.is_file(),
+                source_changed=source_changed,
+                volume=volume,
+            )
             self.call_sound_effect.play()
             self.is_call_audio_playing = True
             self.blink_call_alert_visibility.emit(True)
+            QTimer.singleShot(500, lambda source=source: self._verify_call_audio_started(source))
+        else:
+            self._record_call_audio_state("play_duration_reset")
 
         duration_s = int(self.setting_vm.get_config("blink_call.audio.play_duration_s"))
         if duration_s > 0:
             self.call_sound_stop_timer.start(duration_s * 1000)
+            log_audio_status("call_alert", "stop_timer_started", duration_s=duration_s)
         else:
             self.call_sound_stop_timer.stop()
+            log_audio_status("call_alert", "stop_timer_disabled")
 
     def stop_call_audio(self):
         self.call_sound_stop_timer.stop()
+        self._record_call_audio_state("stop_requested")
         self.call_sound_effect.stop()
         if self.is_call_audio_playing:
             self.is_call_audio_playing = False
             self.blink_call_alert_visibility.emit(False)
 
     def play_stage_prompt_sound(self):
-        if self.setting_popup or not bool(self.setting_vm.get_config("blink_call.enabled")):
+        if self.setting_popup:
+            log_audio_status("stage_prompt", "play_skipped", reason="settings_open")
+            return
+        if not bool(self.setting_vm.get_config("blink_call.enabled")):
+            log_audio_status("stage_prompt", "play_skipped", reason="blink_call_disabled")
             return
 
         volume = int(self.setting_vm.get_config("blink_call.audio.volume"))
         volume = max(0, min(100, volume))
         self.stage_prompt_sound_player.set_volume(float(volume) / 100.0)
         audio_logger.info("stage_prompt_requested")
+        log_audio_status("stage_prompt", "play_requested", volume=volume)
         self.stage_prompt_sound_player.play()
+
+    def _on_call_audio_status_changed(self):
+        self._record_call_audio_state("status_changed")
+
+    def _on_call_audio_loaded_changed(self):
+        self._record_call_audio_state("loaded_changed")
+
+    def _on_call_audio_playing_changed(self):
+        self._record_call_audio_state("playing_changed")
+
+    def _verify_call_audio_started(self, source: QUrl):
+        if self.call_sound_effect.source() != source:
+            return
+        self._record_call_audio_state("start_check")
+
+    def _record_call_audio_state(self, event: str):
+        effect = self.call_sound_effect
+        source = effect.source()
+        source_path = source.toLocalFile() or source.toString()
+        log_audio_status(
+            "call_alert",
+            event,
+            status=getattr(effect.status(), "name", str(effect.status())),
+            loaded=effect.isLoaded(),
+            playing=effect.isPlaying(),
+            source=source_path or "none",
+            tracked_playing=getattr(self, "is_call_audio_playing", False),
+            volume=f"{effect.volume():.2f}",
+        )
+
+    def _on_audio_outputs_changed(self):
+        self._record_audio_outputs("outputs_changed")
+
+    def _record_audio_outputs(self, event: str):
+        try:
+            outputs = QMediaDevices.audioOutputs()
+            output_names = ", ".join(self._audio_device_description(device) for device in outputs)
+            default_output = self._audio_device_description(QMediaDevices.defaultAudioOutput())
+        except Exception as exc:
+            log_audio_status("audio_output", event, error=exc)
+            return
+        log_audio_status(
+            "audio_output",
+            event,
+            available=output_names or "none",
+            default=default_output,
+        )
+
+    @staticmethod
+    def _audio_device_description(device) -> str:
+        if device is None:
+            return "none"
+        try:
+            if device.isNull():
+                return "none"
+            return str(device.description() or "unnamed")
+        except (AttributeError, RuntimeError):
+            return "unknown"
 
     def start_recording(self):
         self.is_recording_mode = True

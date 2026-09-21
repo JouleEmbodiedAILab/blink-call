@@ -4,6 +4,8 @@ from pathlib import Path
 from PySide6.QtCore import QObject, QTimer, QUrl, Signal
 from PySide6.QtMultimedia import QMediaDevices, QSoundEffect
 
+from blink_call.core.audio_status_logging import log_audio_status
+
 
 audio_logger = logging.getLogger("blink_call.audio")
 
@@ -57,6 +59,7 @@ class RecoveringSoundEffect(QObject):
         self._volume = max(0.0, min(1.0, float(volume)))
         if self._effect is not None:
             self._effect.setVolume(self._volume)
+        self._emit_diagnostic(f"volume_updated; volume={self._volume:.2f}")
 
     def play(self):
         if self._pending_play:
@@ -70,6 +73,7 @@ class RecoveringSoundEffect(QObject):
         self._retry_attempt = 0
         self._retry_scheduled = False
         self._loading_wait_key = None
+        self._emit_diagnostic(f"play_requested; request={request_id}")
 
         if not self.source_path.is_file():
             self._pending_play = False
@@ -80,6 +84,7 @@ class RecoveringSoundEffect(QObject):
         self._attempt_play(request_id)
 
     def stop(self):
+        self._emit_diagnostic(f"play_stopped; request={self._request_id}")
         self._request_id += 1
         self._pending_play = False
         self._awaiting_start = False
@@ -304,4 +309,5 @@ class RecoveringSoundEffect(QObject):
         return getattr(status, "name", str(status))
 
     def _emit_diagnostic(self, text: str):
+        log_audio_status("stage_prompt", "state", message=text)
         self.diagnostic.emit(f"[StagePromptAudio] {text}")

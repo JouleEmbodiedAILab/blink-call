@@ -36,6 +36,8 @@ Settings -> Other -> Debug Mode.
 
 This feature displays or saves software logs. It is usually used by developers or staff members when they need to investigate issues.
 
+When Debug Mode is enabled, the selected log folder also receives a separate `audio_status.log`. It records audio-output changes, the alert source and volume, load/play states, play requests, and stop events to help investigate a call that was triggered without sound. The file is rotated and keeps recent records.
+
 It is not needed for daily calling.
 
 ## Restore Default Settings
