@@ -61,7 +61,7 @@ class WindowsWatchdogTests(unittest.TestCase):
                 service = WindowsWatchdogService()
 
         self.assertEqual(service._app_command[0], str(packaged_executable.resolve()))
-        self.assertEqual(service._app_command[1:], ["--background", WATCHDOG_SUPERVISED_ARGUMENT])
+        self.assertEqual(service._app_command[1:], [WATCHDOG_SUPERVISED_ARGUMENT])
 
     def test_service_command_rejects_source_launcher(self):
         with patch("blink_call.core.windows_watchdog.sys.argv", ["blink_call/setup_app.py"]), patch(

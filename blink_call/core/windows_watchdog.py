@@ -417,7 +417,6 @@ class WindowsWatchdogService:
             executable = Path(sys.argv[0] if sys.argv else sys.executable).resolve()
         self._app_command = [
             str(executable),
-            "--background",
             WATCHDOG_SUPERVISED_ARGUMENT,
         ]
         self._app_working_directory = executable.parent

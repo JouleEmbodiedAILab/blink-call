@@ -81,7 +81,7 @@ if __name__ == "__main__":
     if "--background" in app.arguments() and window.tray_available:
         window.hide()
     else:
-        window.show()
+        window.show_window()
     exit_code = app.exec()
     if WATCHDOG_SUPERVISED_ARGUMENT in app.arguments() and window.user_requested_exit:
         exit_code = WATCHDOG_USER_EXIT_CODE
