@@ -117,6 +117,7 @@ class HomeView(QWidget):
         self.vm.local_service_status.connect(self.on_set_service_mode)
         self.vm.blink_progress_updated.connect(self.on_blink_progress_updated)
         self.vm.blink_call_alert_visibility.connect(self.on_blink_call_alert_visibility)
+        self.vm.auto_alarm_reason_changed.connect(self.on_auto_alarm_reason_changed)
         self.vm.home_hint.connect(self.on_home_hint)
         self.vm.recording_state_changed.connect(self.on_recording_state_changed)
 
@@ -128,7 +129,7 @@ class HomeView(QWidget):
         i18n = get_i18n(language)
         self.setting_btn.setText(i18n["setting"])
         self.exit_btn.setText(i18n["exit"])
-        self.call_close_btn.setText(i18n["calling"])
+        self.call_close_btn.setText(i18n.get(self.vm.auto_alarm_reason_key, i18n["calling"]))
 
     def on_open_setting_popup(self):
         self.setting_btn.setVisible(False)
@@ -204,6 +205,10 @@ class HomeView(QWidget):
         self.call_block_overlay.show()
         self.call_block_overlay.raise_()
         self.call_close_btn.raise_()
+
+    def on_auto_alarm_reason_changed(self, reason_key: str):
+        i18n = get_i18n(self.vm.setting_vm.get_config("ui.language"))
+        self.call_close_btn.setText(i18n.get(reason_key, i18n["calling"]))
 
     def on_home_hint(self, data: dict):
         visible = bool(data.get("visible"))

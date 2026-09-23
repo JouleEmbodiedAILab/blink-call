@@ -8,15 +8,24 @@ import numpy as np
 
 
 class RemoteCameraClient:
-    def __init__(self, ip: str, port: int, timeout: float = 3, interval: float = 0.03):
+    def __init__(
+        self,
+        ip: str,
+        port: int,
+        timeout: float = 3,
+        interval: float = 0.03,
+        stale_frame_timeout_s: float = 1.0,
+    ):
         self.ip = ip
         self.port = port
         self.timeout = timeout
         self.interval = interval
+        self.stale_frame_timeout_s = max(0.0, float(stale_frame_timeout_s))
 
         self.running = False
         self.latest_frame = None
-        self.status_code = 0
+        self._status_code = 0
+        self._latest_frame_at = None
 
         self._lock = threading.Lock()
         self._thread = None
@@ -25,10 +34,23 @@ class RemoteCameraClient:
     def frame_url(self):
         return f"http://{self.ip}:{self.port}/frame"
 
-    def set_response(self, status_code, frame):
-        self.status_code = status_code
+    @property
+    def status_code(self):
         with self._lock:
+            if (
+                self.latest_frame is not None
+                and self._latest_frame_at is not None
+                and self.stale_frame_timeout_s > 0
+                and time.monotonic() - self._latest_frame_at >= self.stale_frame_timeout_s
+            ):
+                return -4
+            return self._status_code
+
+    def set_response(self, status_code, frame):
+        with self._lock:
+            self._status_code = status_code
             self.latest_frame = frame
+            self._latest_frame_at = time.monotonic() if frame is not None else None
 
     def start(self):
         if self.running:
@@ -75,5 +97,13 @@ class RemoteCameraClient:
     def read_latest_frame(self):
         with self._lock:
             if self.latest_frame is None:
+                return None
+            if (
+                self._latest_frame_at is None
+                or (
+                    self.stale_frame_timeout_s > 0
+                    and time.monotonic() - self._latest_frame_at >= self.stale_frame_timeout_s
+                )
+            ):
                 return None
             return self.latest_frame.copy()

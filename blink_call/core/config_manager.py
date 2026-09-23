@@ -24,6 +24,11 @@ class ConfigManager:
             "blink_call": {
                 "enabled": True,
                 "show_home_progress_bar": True,
+                "abnormal_alert": {
+                    "enabled": False,
+                    "camera_missing_after_s": 300,
+                    "face_missing_after_s": 300,
+                },
                 "audio": {
                     "enabled": True,
                     "file": "ring_01.wav",

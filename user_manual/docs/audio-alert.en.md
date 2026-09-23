@@ -44,4 +44,10 @@ You can set how long the sound plays after a call is triggered.
 
 If you want the alert to continue until a family member manually stops it, choose [Infinite].
 
+## Alert When the Camera or Face Is Missing
+
+Turn on [Automatic Abnormality Alert] to set separate delays for a missing camera image and a face that cannot be detected. Both delays default to 5 minutes.
+
+The alert uses the selected ringtone and software volume, and loops until the camera image or face detection recovers. Click the alert screen to silence it; it will not ring again until the current abnormal condition clears. This setting works independently of [Play Call Audio] and the normal call playback duration.
+
 ![Set playback duration](https://cdn.jsdelivr.net/gh/JouleEmbodiedAILab/blink-call@main/user_manual/docs/images/audio-alert-settings.jpg)

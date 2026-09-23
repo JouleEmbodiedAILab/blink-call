@@ -29,6 +29,7 @@ class HomeViewModel(QObject):
     local_service_status = Signal(bool)
     blink_progress_updated = Signal(dict)
     blink_call_alert_visibility = Signal(bool)
+    auto_alarm_reason_changed = Signal(str)
     home_hint = Signal(dict)
     recording_state_changed = Signal(dict)
 
@@ -59,6 +60,10 @@ class HomeViewModel(QObject):
         self.timer.setInterval(20)
         self.timer.timeout.connect(self.on_update_frame)
 
+        self.auto_alarm_monitor_timer = QTimer(self)
+        self.auto_alarm_monitor_timer.setInterval(250)
+        self.auto_alarm_monitor_timer.timeout.connect(self._on_auto_alarm_monitor_tick)
+
         self.call_sound_effect = QSoundEffect(self)
         self.call_sound_effect.setLoopCount(int(QSoundEffect.Loop.Infinite.value))
         self.call_sound_effect.statusChanged.connect(self._on_call_audio_status_changed)
@@ -73,7 +78,7 @@ class HomeViewModel(QObject):
         self.stage_prompt_sound_player.diagnostic.connect(self.show_debug_msg.emit)
         self.call_sound_stop_timer = QTimer(self)
         self.call_sound_stop_timer.setSingleShot(True)
-        self.call_sound_stop_timer.timeout.connect(self.stop_call_audio)
+        self.call_sound_stop_timer.timeout.connect(self.stop_blink_call_audio)
 
         self._record_call_audio_state("player_initialized")
         self._record_audio_outputs("outputs_initialized")
@@ -90,9 +95,17 @@ class HomeViewModel(QObject):
         self.ui_fps_window_start = time.perf_counter()
         self.ui_fps_counter = 0
         self.is_call_audio_playing = False
+        self.blink_call_audio_requested = False
+        self.auto_alarm_monitoring_active = False
+        self.camera_missing_since_s = None
+        self.face_missing_since_s = None
+        self.auto_alarm_conditions = set()
+        self.auto_alarm_silenced = False
+        self.auto_alarm_reason_key = ""
         self.setting_popup = False
         self.last_local_camera_state = None
         self.camera_frame_available = False
+        self.is_local_service_mode = False
 
         self.is_recording_mode = False
         self.recording_output_dir = None
@@ -106,9 +119,10 @@ class HomeViewModel(QObject):
         self.show_camera_status.emit(text.format(**params))
 
     def on_page_enter(self):
+        self.auto_alarm_monitor_timer.stop()
+        self.stop_call_audio()
         self._initialize_vars()
         self._record_audio_outputs("debug_session_started")
-        self.stop_call_audio()
         self.stage_prompt_sound_player.stop()
         self.close_recording_writer()
         self.blink_progress_updated.emit(
@@ -121,6 +135,7 @@ class HomeViewModel(QObject):
         )
 
         self.local_service_status.emit(False)
+        self.is_local_service_mode = False
         self.home_hint.emit({"visible": False, "text": ""})
         self.recording_state_changed.emit({"active": False, "elapsed_s": 0, "total_s": 0})
         self.clear_debug_msg.emit()
@@ -136,6 +151,10 @@ class HomeViewModel(QObject):
             ok = self.model.start_remote_capture(remote_ip, remote_port)
             self.timer.start() if ok else self.timer.stop()
             self.start_infer_worker() if ok else self.stop_infer_worker()
+            if ok:
+                self._start_auto_alarm_monitoring()
+            else:
+                self._stop_auto_alarm_monitoring()
             if not ok:
                 self.emit_show_camera_status("unknown_error")
 
@@ -151,14 +170,20 @@ class HomeViewModel(QObject):
 
             self.timer.start() if ok else self.timer.stop()
             self.start_infer_worker() if ok else self.stop_infer_worker()
+            if ok:
+                self._start_auto_alarm_monitoring()
+            else:
+                self._stop_auto_alarm_monitoring()
             if not ok:
                 self.emit_show_camera_status("local_invalid_camera")
 
     def on_update_frame(self):
         _mode, frame, status_code = self.model.read_frame()
         if frame is None:
-            if self.camera_frame_available:
-                self.camera_frame_available = False
+            had_camera_frame = self.camera_frame_available
+            self.camera_frame_available = False
+            self._update_auto_alarm_camera_state(False)
+            if had_camera_frame:
                 self.home_hint.emit({"visible": False, "text": ""})
 
             if _mode == "local":
@@ -179,6 +204,7 @@ class HomeViewModel(QObject):
             return
 
         self.camera_frame_available = True
+        self._update_auto_alarm_camera_state(True)
         self.last_local_camera_state = "running" if _mode == "local" else None
 
         if self.debug_mode:
@@ -210,6 +236,8 @@ class HomeViewModel(QObject):
         ok, ip, port = self.model.start_local_camera_service(local_camera_id, service_port)
 
         self.timer.stop()
+        self.is_local_service_mode = True
+        self._stop_auto_alarm_monitoring()
         self.stop_infer_worker()
         self.stop_call_audio()
         self.local_service_status.emit(True)
@@ -241,6 +269,14 @@ class HomeViewModel(QObject):
             self.show_debug_msg.emit(text)
 
     def on_eye_region_status(self, status):
+        if status == "no_face" and self.camera_frame_available:
+            if self.face_missing_since_s is None:
+                self.face_missing_since_s = time.monotonic()
+        else:
+            self.face_missing_since_s = None
+            self._set_auto_alarm_condition("face_missing", False)
+        self._evaluate_auto_alarm_thresholds()
+
         if not self.camera_frame_available:
             return
 
@@ -255,13 +291,116 @@ class HomeViewModel(QObject):
         i18n = get_i18n(self.setting_vm.get_config("ui.language"))
         self.home_hint.emit({"visible": key is not None, "text": i18n.get(key, "")})
 
+    def _start_auto_alarm_monitoring(self):
+        self.auto_alarm_monitor_timer.stop()
+        self.auto_alarm_monitoring_active = False
+        self._clear_auto_alarm_monitor_state()
+        if (
+            not bool(self.setting_vm.get_config("blink_call.abnormal_alert.enabled"))
+            or self.is_recording_mode
+            or self.is_local_service_mode
+        ):
+            return
+
+        self.auto_alarm_monitoring_active = True
+        self.auto_alarm_monitor_timer.start()
+        self._update_auto_alarm_camera_state(self.camera_frame_available)
+
+    def _stop_auto_alarm_monitoring(self):
+        self.auto_alarm_monitor_timer.stop()
+        self.auto_alarm_monitoring_active = False
+        self._clear_auto_alarm_monitor_state()
+
+    def _clear_auto_alarm_monitor_state(self):
+        self.camera_missing_since_s = None
+        self.face_missing_since_s = None
+        self.auto_alarm_conditions.clear()
+        self.auto_alarm_silenced = False
+        self._sync_call_alert_audio()
+
+    def _on_auto_alarm_monitor_tick(self):
+        if not self.auto_alarm_monitoring_active:
+            return
+        self._evaluate_auto_alarm_thresholds()
+
+    def _update_auto_alarm_camera_state(self, camera_available: bool):
+        if not self.auto_alarm_monitoring_active:
+            return
+
+        if camera_available:
+            self.camera_missing_since_s = None
+            self._set_auto_alarm_condition("camera_missing", False)
+        else:
+            if self.camera_missing_since_s is None:
+                self.camera_missing_since_s = time.monotonic()
+            self.face_missing_since_s = None
+            self._set_auto_alarm_condition("face_missing", False)
+
+        self._evaluate_auto_alarm_thresholds()
+
+    def _evaluate_auto_alarm_thresholds(self):
+        if not self.auto_alarm_monitoring_active:
+            return
+
+        now = time.monotonic()
+        if not self.camera_frame_available:
+            if self.camera_missing_since_s is None:
+                self.camera_missing_since_s = now
+            camera_threshold_s = max(
+                1,
+                int(self.setting_vm.get_config("blink_call.abnormal_alert.camera_missing_after_s")),
+            )
+            self._set_auto_alarm_condition(
+                "camera_missing",
+                now - self.camera_missing_since_s >= camera_threshold_s,
+            )
+            self.face_missing_since_s = None
+            self._set_auto_alarm_condition("face_missing", False)
+            return
+
+        self.camera_missing_since_s = None
+        self._set_auto_alarm_condition("camera_missing", False)
+        if self.face_missing_since_s is None:
+            self._set_auto_alarm_condition("face_missing", False)
+            return
+
+        face_threshold_s = max(
+            1,
+            int(self.setting_vm.get_config("blink_call.abnormal_alert.face_missing_after_s")),
+        )
+        self._set_auto_alarm_condition(
+            "face_missing",
+            now - self.face_missing_since_s >= face_threshold_s,
+        )
+
+    def _set_auto_alarm_condition(self, condition: str, active: bool):
+        was_active = condition in self.auto_alarm_conditions
+        if active:
+            self.auto_alarm_conditions.add(condition)
+        else:
+            self.auto_alarm_conditions.discard(condition)
+
+        if was_active != active:
+            if not self.auto_alarm_conditions:
+                self.auto_alarm_silenced = False
+            self._sync_call_alert_audio()
+
+    def _get_auto_alarm_reason_key(self):
+        if "face_missing" in self.auto_alarm_conditions:
+            return "face_missing_alarm"
+        if "camera_missing" in self.auto_alarm_conditions:
+            return "camera_missing_alarm"
+        return ""
+
     def on_listen_setting_popup(self, is_open: bool):
         self.setting_popup = is_open
         if is_open:
             self.stage_prompt_sound_player.stop()
 
     def start_infer_worker(self):
-        if not bool(self.setting_vm.get_config("blink_call.enabled")) or self.is_recording_mode:
+        blink_call_enabled = bool(self.setting_vm.get_config("blink_call.enabled"))
+        auto_alarm_enabled = bool(self.setting_vm.get_config("blink_call.abnormal_alert.enabled"))
+        if (not blink_call_enabled and not auto_alarm_enabled) or self.is_recording_mode:
             return
 
         if not self.model_files_manager.all_model_files_exists():
@@ -293,34 +432,8 @@ class HomeViewModel(QObject):
         if not isinstance(file_name, str) or not file_name.strip():
             log_audio_status("call_alert", "play_skipped", reason="audio_file_not_configured")
             return
-        audio_path = Path("assets") / "audio" / file_name
-
-        volume = int(self.setting_vm.get_config("blink_call.audio.volume"))
-        volume = max(0, min(100, volume))
-        self.call_sound_effect.setVolume(float(volume) / 100.0)
-
-        source = QUrl.fromLocalFile(str(audio_path.resolve()))
-        source_changed = self.call_sound_effect.source() != source
-        if source_changed:
-            self.call_sound_effect.setSource(source)
-
-        # If already playing the same source, only reset countdown; do not replay/stack.
-        if not self.is_call_audio_playing or source_changed:
-            self.call_sound_effect.stop()
-            log_audio_status(
-                "call_alert",
-                "play_requested",
-                source=audio_path.resolve(),
-                source_exists=audio_path.is_file(),
-                source_changed=source_changed,
-                volume=volume,
-            )
-            self.call_sound_effect.play()
-            self.is_call_audio_playing = True
-            self.blink_call_alert_visibility.emit(True)
-            QTimer.singleShot(500, lambda source=source: self._verify_call_audio_started(source))
-        else:
-            self._record_call_audio_state("play_duration_reset")
+        self.blink_call_audio_requested = True
+        self._sync_call_alert_audio()
 
         duration_s = int(self.setting_vm.get_config("blink_call.audio.play_duration_s"))
         if duration_s > 0:
@@ -332,11 +445,61 @@ class HomeViewModel(QObject):
 
     def stop_call_audio(self):
         self.call_sound_stop_timer.stop()
-        self._record_call_audio_state("stop_requested")
-        self.call_sound_effect.stop()
-        if self.is_call_audio_playing:
-            self.is_call_audio_playing = False
-            self.blink_call_alert_visibility.emit(False)
+        self.blink_call_audio_requested = False
+        if self.auto_alarm_conditions:
+            self.auto_alarm_silenced = True
+        self._sync_call_alert_audio()
+
+    def stop_blink_call_audio(self):
+        self.call_sound_stop_timer.stop()
+        self.blink_call_audio_requested = False
+        self._sync_call_alert_audio()
+
+    def _sync_call_alert_audio(self):
+        auto_alarm_audible = bool(self.auto_alarm_conditions) and not self.auto_alarm_silenced
+        should_alert = self.blink_call_audio_requested or auto_alarm_audible
+        reason_key = self._get_auto_alarm_reason_key() if auto_alarm_audible else ""
+
+        if should_alert:
+            file_name = self.setting_vm.get_config("blink_call.audio.file")
+            if isinstance(file_name, str) and file_name.strip():
+                audio_path = Path("assets") / "audio" / file_name
+                volume = int(self.setting_vm.get_config("blink_call.audio.volume"))
+                volume = max(0, min(100, volume))
+                self.call_sound_effect.setVolume(float(volume) / 100.0)
+
+                source = QUrl.fromLocalFile(str(audio_path.resolve()))
+                source_changed = self.call_sound_effect.source() != source
+                if source_changed:
+                    self.call_sound_effect.setSource(source)
+
+                if not self.call_sound_effect.isPlaying() or source_changed:
+                    self.call_sound_effect.stop()
+                    log_audio_status(
+                        "call_alert",
+                        "play_requested",
+                        source=audio_path.resolve(),
+                        source_exists=audio_path.is_file(),
+                        source_changed=source_changed,
+                        volume=volume,
+                        auto_alarm=auto_alarm_audible,
+                    )
+                    self.call_sound_effect.play()
+                    QTimer.singleShot(500, lambda source=source: self._verify_call_audio_started(source))
+                else:
+                    self._record_call_audio_state("play_request_refreshed")
+            else:
+                log_audio_status("call_alert", "play_skipped", reason="audio_file_not_configured")
+        else:
+            self._record_call_audio_state("stop_requested")
+            self.call_sound_effect.stop()
+
+        if self.is_call_audio_playing != should_alert:
+            self.is_call_audio_playing = should_alert
+            self.blink_call_alert_visibility.emit(should_alert)
+        if self.auto_alarm_reason_key != reason_key:
+            self.auto_alarm_reason_key = reason_key
+            self.auto_alarm_reason_changed.emit(reason_key)
 
     def play_stage_prompt_sound(self):
         if self.setting_popup:
@@ -413,6 +576,8 @@ class HomeViewModel(QObject):
 
     def start_recording(self):
         self.is_recording_mode = True
+        self._stop_auto_alarm_monitoring()
+        self.stop_call_audio()
 
         self.blink_progress_updated.emit(
             {
@@ -485,6 +650,7 @@ class HomeViewModel(QObject):
 
     def stop_all(self):
         self.timer.stop()
+        self._stop_auto_alarm_monitoring()
         self.stop_infer_worker()
         self.stop_call_audio()
         self.stage_prompt_sound_player.stop()

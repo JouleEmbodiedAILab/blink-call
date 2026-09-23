@@ -30,6 +30,7 @@ class BlinkCallController:
         self.sequence_rows = []
         self.audio_file_values = [f"ring_{i:02d}.wav" for i in range(1, 11)]
         self.audio_duration_values = [10, 30, 60, 300, 600, 1800, 3600, -1]
+        self.abnormal_alert_duration_values = [10, 30, 60, 300, 600, 1800, 3600]
         self.preview_sound = QSoundEffect(setting_view)
         self.model_files_manager = ModelFilesManager()
 
@@ -47,6 +48,30 @@ class BlinkCallController:
         self.page.disabled_radio.setProperty("tag_value", False)
         ConfigBinder.bind_radio_group(self.vm, blink_call_group, "blink_call.enabled", self.update_sequence_visibility)
         self.blink_call_group = blink_call_group
+
+        abnormal_alert_group = QButtonGroup()
+        abnormal_alert_group.addButton(self.page.abnormal_alert_on_radio)
+        abnormal_alert_group.addButton(self.page.abnormal_alert_off_radio)
+        self.page.abnormal_alert_on_radio.setProperty("tag_value", True)
+        self.page.abnormal_alert_off_radio.setProperty("tag_value", False)
+        ConfigBinder.bind_radio_group(
+            self.vm,
+            abnormal_alert_group,
+            "blink_call.abnormal_alert.enabled",
+            self.update_abnormal_alert_visibility,
+        )
+        self.abnormal_alert_group = abnormal_alert_group
+
+        ConfigBinder.bind_combo(
+            self.vm,
+            self.page.camera_missing_duration_combo,
+            "blink_call.abnormal_alert.camera_missing_after_s",
+        )
+        ConfigBinder.bind_combo(
+            self.vm,
+            self.page.face_missing_duration_combo,
+            "blink_call.abnormal_alert.face_missing_after_s",
+        )
 
         blink_call_progress_group = QButtonGroup()
         blink_call_progress_group.addButton(self.page.progress_show_radio)
@@ -78,6 +103,14 @@ class BlinkCallController:
             self.page.audio_file_combo.addItem(f"Audio {idx}", file_name)
         for duration_s in self.audio_duration_values:
             self.page.audio_duration_combo.addItem(str(duration_s), duration_s)
+        for combo in (
+            self.page.camera_missing_duration_combo,
+            self.page.face_missing_duration_combo,
+        ):
+            combo.blockSignals(True)
+            for duration_s in self.abnormal_alert_duration_values:
+                combo.addItem(str(duration_s), duration_s)
+            combo.blockSignals(False)
 
         self.model_files_manager.status_changed.connect(self.on_model_files_status_changed)
         self.model_files_manager.download_started.connect(self.on_model_files_download_started)
@@ -99,6 +132,26 @@ class BlinkCallController:
             self.page.audio_on_radio.setChecked(True)
         else:
             self.page.audio_off_radio.setChecked(True)
+
+        if bool(self.vm.get_config("blink_call.abnormal_alert.enabled")):
+            self.page.abnormal_alert_on_radio.setChecked(True)
+        else:
+            self.page.abnormal_alert_off_radio.setChecked(True)
+
+        for combo, path in (
+            (
+                self.page.camera_missing_duration_combo,
+                "blink_call.abnormal_alert.camera_missing_after_s",
+            ),
+            (
+                self.page.face_missing_duration_combo,
+                "blink_call.abnormal_alert.face_missing_after_s",
+            ),
+        ):
+            index = combo.findData(self.vm.get_config(path))
+            combo.blockSignals(True)
+            combo.setCurrentIndex(index if index >= 0 else combo.findData(300))
+            combo.blockSignals(False)
 
         audio_file_idx = self.page.audio_file_combo.findData(self.vm.get_config("blink_call.audio.file"))
         self.page.audio_file_combo.blockSignals(True)
@@ -146,6 +199,11 @@ class BlinkCallController:
         self.page.audio_preview_btn.setText(i18n["preview"])
         self.page.audio_volume_label.setText(i18n["audio_volume"])
         self.page.audio_duration_label.setText(i18n["audio_play_duration"])
+        self.page.abnormal_alert_label.setText(i18n["automatic_abnormality_alert"])
+        self.page.abnormal_alert_on_radio.setText(i18n["on"])
+        self.page.abnormal_alert_off_radio.setText(i18n["off"])
+        self.page.camera_missing_duration_label.setText(i18n["camera_missing_alert_after"])
+        self.page.face_missing_duration_label.setText(i18n["face_missing_alert_after"])
         self.page.model_label.setText(i18n["download_or_update_model_files"])
         self.page.model_desc_input.setText("")
         self.page.model_btn.setText(i18n["download_or_update"])
@@ -166,6 +224,19 @@ class BlinkCallController:
         for idx, key in enumerate(duration_keys):
             self.page.audio_duration_combo.setItemText(idx, i18n[key])
 
+        abnormal_duration_keys = [
+            "ten_seconds",
+            "thirty_seconds",
+            "one_minute",
+            "five_minutes",
+            "ten_minutes",
+            "thirty_minutes",
+            "one_hour",
+        ]
+        for idx, key in enumerate(abnormal_duration_keys):
+            self.page.camera_missing_duration_combo.setItemText(idx, i18n[key])
+            self.page.face_missing_duration_combo.setItemText(idx, i18n[key])
+
         for row in self.sequence_rows:
             row["state_combo"].setItemText(0, i18n["open_eyes"])
             row["state_combo"].setItemText(1, i18n["close_eyes"])
@@ -174,6 +245,7 @@ class BlinkCallController:
             row["sound_prompt_combo"].setItemText(0, i18n["no"])
             row["sound_prompt_combo"].setItemText(1, i18n["yes"])
             row["remove_btn"].setText(i18n["remove"])
+        self.update_abnormal_alert_visibility()
 
     def normalize_pattern(self, pattern):
         normalized = []
@@ -330,15 +402,23 @@ class BlinkCallController:
         self.update_audio_visibility()
 
     def update_audio_visibility(self, _value=None):
-        enabled = bool(self.page.enabled_radio.isChecked())
-        audio_enabled = bool(self.page.audio_on_radio.isChecked())
-        show_audio_settings = enabled and audio_enabled
+        call_audio_enabled = bool(self.page.enabled_radio.isChecked()) and bool(
+            self.page.audio_on_radio.isChecked()
+        )
+        auto_alert_enabled = bool(self.page.abnormal_alert_on_radio.isChecked())
+        show_audio_settings = call_audio_enabled or auto_alert_enabled
         self.page.audio_file_row.setVisible(show_audio_settings)
         self.page.audio_file_divider.setVisible(show_audio_settings)
         self.page.audio_volume_row.setVisible(show_audio_settings)
         self.page.audio_volume_divider.setVisible(show_audio_settings)
-        self.page.audio_duration_row.setVisible(show_audio_settings)
-        self.page.audio_duration_divider.setVisible(show_audio_settings)
+        self.page.audio_duration_row.setVisible(call_audio_enabled)
+        self.page.audio_duration_divider.setVisible(call_audio_enabled)
+
+    def update_abnormal_alert_visibility(self, _value=None):
+        enabled = self.page.abnormal_alert_on_radio.isChecked()
+        self.page.camera_missing_duration_row.setEnabled(enabled)
+        self.page.face_missing_duration_row.setEnabled(enabled)
+        self.update_audio_visibility()
 
     def on_model_files_status_changed(self, payload=None):
         i18n = get_i18n(self.vm.get_config("ui.language"))
