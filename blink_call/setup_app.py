@@ -1,38 +1,27 @@
-import logging
 import sys
 from pathlib import Path
 
 from blink_call.core.windows_watchdog import (
-    WATCHDOG_DISABLE_ARGUMENT,
-    WATCHDOG_ENABLE_ARGUMENT,
     WATCHDOG_SERVICE_ARGUMENT,
     WATCHDOG_SUPERVISED_ARGUMENT,
     WATCHDOG_USER_EXIT_CODE,
-    run_watchdog_configuration,
     run_watchdog_service,
 )
 
-if __name__ == "__main__":
-    if WATCHDOG_SERVICE_ARGUMENT in sys.argv:
-        sys.exit(run_watchdog_service())
-    if WATCHDOG_ENABLE_ARGUMENT in sys.argv:
-        sys.exit(run_watchdog_configuration(True))
-    if WATCHDOG_DISABLE_ARGUMENT in sys.argv:
-        sys.exit(run_watchdog_configuration(False))
+if __name__ == "__main__" and WATCHDOG_SERVICE_ARGUMENT in sys.argv:
+    sys.exit(run_watchdog_service())
 
-from PySide6.QtCore import QStandardPaths, QTimer
+from PySide6.QtCore import QStandardPaths
 from PySide6.QtGui import QIcon
-from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtWidgets import QApplication
 
 from blink_call.core.config_manager import ConfigManager
 from blink_call.core.dependency_injection import DI
 from blink_call.core.logging_setup import configure_app_logging
 from blink_call.core.navigation import Navigation
 from blink_call.core.theme_manager import ThemeManager
-from blink_call.core.windows_autostart import WindowsAutostartManager
 from blink_call.main_window import MainWindow
 from blink_call.modules import MODULES_REGISTRY
-from blink_call.modules.i18n import get_i18n
 from blink_call.core.resource_path import get_resource_path
 
 
@@ -88,24 +77,6 @@ def create_app(app=None):
     return app, main_window
 
 
-def ensure_default_windows_autostart(window):
-    if not WindowsAutostartManager.is_supported():
-        return
-    if not WindowsAutostartManager.get_enabled():
-        return
-    ok, error = WindowsAutostartManager.set_enabled(True)
-    if ok:
-        return
-    logging.getLogger("blink_call.watchdog").warning("watchdog_auto_setup_failed error=%s", error)
-    config = ConfigManager.get_local_config()
-    i18n = get_i18n(config["ui"]["language"])
-    QMessageBox.warning(
-        window,
-        i18n["autostart_failed_title"],
-        f"{i18n['autostart_failed_text']}\n\n{error}",
-    )
-
-
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     single_instance = None
@@ -123,8 +94,6 @@ if __name__ == "__main__":
         window.show_window()
     if single_instance is not None:
         single_instance.bind_window(window)
-    if WATCHDOG_SUPERVISED_ARGUMENT not in app.arguments():
-        QTimer.singleShot(0, lambda: ensure_default_windows_autostart(window))
     try:
         exit_code = app.exec()
     finally:

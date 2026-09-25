@@ -26,8 +26,6 @@ logger = logging.getLogger("blink_call.watchdog")
 
 WATCHDOG_SERVICE_ARGUMENT = "--watchdog-service"
 WATCHDOG_SUPERVISED_ARGUMENT = "--watchdog-supervised"
-WATCHDOG_ENABLE_ARGUMENT = "--watchdog-enable"
-WATCHDOG_DISABLE_ARGUMENT = "--watchdog-disable"
 WATCHDOG_USER_EXIT_CODE = 0x4243
 
 
@@ -43,13 +41,10 @@ SERVICE_ACCEPT_SHUTDOWN = 0x00000004
 SERVICE_CONTROL_STOP = 0x00000001
 SERVICE_CONTROL_INTERROGATE = 0x00000004
 SERVICE_CONTROL_SHUTDOWN = 0x00000005
-SC_MANAGER_CONNECT = 0x00000001
-SERVICE_QUERY_STATUS = 0x00000004
 NO_ERROR = 0
 ERROR_CALL_NOT_IMPLEMENTED = 120
 WAIT_OBJECT_0 = 0
 WAIT_TIMEOUT = 258
-INFINITE = 0xFFFFFFFF
 STILL_ACTIVE = 259
 WTS_ACTIVE = 0
 TH32CS_SNAPPROCESS = 0x00000002
@@ -60,7 +55,6 @@ CREATE_NEW_PROCESS_GROUP = 0x00000200
 TOKEN_ADJUST_PRIVILEGES = 0x00000020
 TOKEN_QUERY = 0x00000008
 SE_PRIVILEGE_ENABLED = 0x00000002
-SEE_MASK_NOCLOSEPROCESS = 0x00000040
 
 WINFUNCTYPE = getattr(ctypes, "WINFUNCTYPE", ctypes.CFUNCTYPE)
 ULONG_PTR = ctypes.c_size_t
@@ -107,26 +101,6 @@ class PROCESS_INFORMATION(ctypes.Structure):
         ("hThread", wintypes.HANDLE),
         ("dwProcessId", wintypes.DWORD),
         ("dwThreadId", wintypes.DWORD),
-    ]
-
-
-class SHELLEXECUTEINFOW(ctypes.Structure):
-    _fields_ = [
-        ("cbSize", wintypes.DWORD),
-        ("fMask", wintypes.ULONG),
-        ("hwnd", wintypes.HWND),
-        ("lpVerb", wintypes.LPCWSTR),
-        ("lpFile", wintypes.LPCWSTR),
-        ("lpParameters", wintypes.LPCWSTR),
-        ("lpDirectory", wintypes.LPCWSTR),
-        ("nShow", ctypes.c_int),
-        ("hInstApp", wintypes.HINSTANCE),
-        ("lpIDList", wintypes.LPVOID),
-        ("lpClass", wintypes.LPCWSTR),
-        ("hkeyClass", wintypes.HKEY),
-        ("dwHotKey", wintypes.DWORD),
-        ("hIcon", wintypes.HANDLE),
-        ("hProcess", wintypes.HANDLE),
     ]
 
 
@@ -200,8 +174,6 @@ class WindowsWatchdogManager:
     SERVICE_DESCRIPTION = "Keeps BlinkCall running in active user sessions."
     RECOVERY_RESET_SECONDS = 24 * 60 * 60
     LEGACY_TASK_NAME = "BlinkCall - AutoStart"
-    STARTUP_POLICY_KEY = r"SOFTWARE\BlinkCall"
-    STARTUP_POLICY_VALUE = "StartupEnabled"
 
     @classmethod
     def is_supported(cls) -> bool:
@@ -213,157 +185,7 @@ class WindowsWatchdogManager:
             return False, "The BlinkCall watchdog is available only on Windows."
         if not cls._is_elevated():
             return False, "Administrator privileges are required to configure the BlinkCall watchdog."
-        ok, error = cls._install_and_start() if enabled else cls._stop_and_remove()
-        if not ok:
-            return ok, error
-        return cls._write_startup_policy(enabled)
-
-    @classmethod
-    def get_startup_policy_enabled(cls) -> bool:
-        """The machine-wide opt-out defaults to enabled until an admin changes it."""
-        if not cls.is_supported():
-            return False
-        import winreg
-
-        try:
-            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, cls.STARTUP_POLICY_KEY) as key:
-                value, _ = winreg.QueryValueEx(key, cls.STARTUP_POLICY_VALUE)
-            return bool(value)
-        except OSError:
-            return True
-
-    @classmethod
-    def _write_startup_policy(cls, enabled: bool) -> tuple[bool, str]:
-        import winreg
-
-        try:
-            with winreg.CreateKeyEx(
-                winreg.HKEY_LOCAL_MACHINE, cls.STARTUP_POLICY_KEY, 0, winreg.KEY_SET_VALUE
-            ) as key:
-                winreg.SetValueEx(
-                    key, cls.STARTUP_POLICY_VALUE, 0, winreg.REG_DWORD, int(enabled)
-                )
-        except OSError as exc:
-            return False, f"Unable to save the machine-wide startup setting: {exc}"
-        return True, ""
-
-    @classmethod
-    def is_installed(cls) -> bool:
-        if not cls.is_supported():
-            return False
-        import winreg
-
-        try:
-            with winreg.OpenKey(
-                winreg.HKEY_LOCAL_MACHINE,
-                rf"SYSTEM\CurrentControlSet\Services\{cls.SERVICE_NAME}",
-            ):
-                return True
-        except OSError:
-            return False
-
-    @classmethod
-    def is_configured(cls) -> bool:
-        command = cls._service_command()
-        if command is None:
-            return False
-        import winreg
-
-        try:
-            with winreg.OpenKey(
-                winreg.HKEY_LOCAL_MACHINE,
-                rf"SYSTEM\CurrentControlSet\Services\{cls.SERVICE_NAME}",
-            ) as key:
-                image_path = winreg.QueryValueEx(key, "ImagePath")[0]
-                start_type = winreg.QueryValueEx(key, "Start")[0]
-        except OSError:
-            return False
-        return (
-            str(image_path).strip().casefold() == command.casefold()
-            and start_type == 2
-            and cls._service_is_active()
-        )
-
-    @classmethod
-    def _service_is_active(cls) -> bool:
-        advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
-        advapi32.OpenSCManagerW.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.DWORD]
-        advapi32.OpenSCManagerW.restype = wintypes.HANDLE
-        advapi32.OpenServiceW.argtypes = [wintypes.HANDLE, wintypes.LPCWSTR, wintypes.DWORD]
-        advapi32.OpenServiceW.restype = wintypes.HANDLE
-        advapi32.QueryServiceStatus.argtypes = [wintypes.HANDLE, ctypes.POINTER(SERVICE_STATUS)]
-        advapi32.QueryServiceStatus.restype = wintypes.BOOL
-        advapi32.CloseServiceHandle.argtypes = [wintypes.HANDLE]
-        advapi32.CloseServiceHandle.restype = wintypes.BOOL
-
-        manager = advapi32.OpenSCManagerW(None, None, SC_MANAGER_CONNECT)
-        if not manager:
-            return False
-        try:
-            service = advapi32.OpenServiceW(manager, cls.SERVICE_NAME, SERVICE_QUERY_STATUS)
-            if not service:
-                return False
-            try:
-                status = SERVICE_STATUS()
-                if not advapi32.QueryServiceStatus(service, ctypes.byref(status)):
-                    return False
-                return status.dwCurrentState in (SERVICE_START_PENDING, SERVICE_RUNNING)
-            finally:
-                advapi32.CloseServiceHandle(service)
-        finally:
-            advapi32.CloseServiceHandle(manager)
-
-    @classmethod
-    def configure(cls, enabled: bool) -> tuple[bool, str]:
-        if not cls.is_supported():
-            return False, "The BlinkCall watchdog is available only on Windows."
-        if enabled and cls.get_startup_policy_enabled() and cls.is_configured():
-            return True, ""
-        if not enabled and not cls.get_startup_policy_enabled() and not cls.is_installed():
-            return True, ""
-        if cls._is_elevated():
-            return cls.set_enabled(enabled)
-        executable = cls._packaged_executable()
-        if executable is None:
-            return False, "The watchdog can be installed only from the packaged BlinkCall.exe build."
-        return cls._run_elevated_configuration(executable, enabled)
-
-    @classmethod
-    def _run_elevated_configuration(cls, executable: Path, enabled: bool) -> tuple[bool, str]:
-        shell32 = ctypes.WinDLL("shell32", use_last_error=True)
-        shell32.ShellExecuteExW.argtypes = [ctypes.POINTER(SHELLEXECUTEINFOW)]
-        shell32.ShellExecuteExW.restype = wintypes.BOOL
-        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-        kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
-        kernel32.WaitForSingleObject.restype = wintypes.DWORD
-        kernel32.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
-        kernel32.GetExitCodeProcess.restype = wintypes.BOOL
-        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
-        kernel32.CloseHandle.restype = wintypes.BOOL
-
-        launch = SHELLEXECUTEINFOW()
-        launch.cbSize = ctypes.sizeof(launch)
-        launch.fMask = SEE_MASK_NOCLOSEPROCESS
-        launch.lpVerb = "runas"
-        launch.lpFile = str(executable)
-        launch.lpParameters = WATCHDOG_ENABLE_ARGUMENT if enabled else WATCHDOG_DISABLE_ARGUMENT
-        launch.lpDirectory = str(executable.parent)
-        launch.nShow = 0
-        if not shell32.ShellExecuteExW(ctypes.byref(launch)):
-            return False, str(ctypes.WinError(ctypes.get_last_error()))
-        if not launch.hProcess:
-            return False, "The elevated watchdog helper did not start."
-        try:
-            if kernel32.WaitForSingleObject(launch.hProcess, INFINITE) != WAIT_OBJECT_0:
-                return False, "Unable to wait for the elevated watchdog helper."
-            exit_code = wintypes.DWORD()
-            if not kernel32.GetExitCodeProcess(launch.hProcess, ctypes.byref(exit_code)):
-                return False, str(ctypes.WinError(ctypes.get_last_error()))
-            if exit_code.value != 0:
-                return False, "The elevated watchdog helper failed; see ProgramData/BlinkCall/logs/watchdog.log."
-            return True, ""
-        finally:
-            kernel32.CloseHandle(launch.hProcess)
+        return cls._install_and_start() if enabled else cls._stop_and_remove()
 
     @classmethod
     def _install_and_start(cls) -> tuple[bool, str]:
@@ -1049,14 +871,3 @@ def _win_error(operation: str) -> OSError:
 def run_watchdog_service() -> int:
     """Run the SCM service entrypoint from ``BlinkCall.exe --watchdog-service``."""
     return WindowsWatchdogService().run()
-
-
-def run_watchdog_configuration(enabled: bool) -> int:
-    """Run a privileged service change in a short-lived helper process."""
-    service_logger = _configure_service_logging()
-    ok, error = WindowsWatchdogManager.set_enabled(enabled)
-    if ok:
-        service_logger.info("watchdog_configuration_succeeded enabled=%s", enabled)
-        return 0
-    service_logger.error("watchdog_configuration_failed enabled=%s error=%s", enabled, error)
-    return 1

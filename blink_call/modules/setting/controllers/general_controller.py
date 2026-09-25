@@ -35,15 +35,8 @@ class GeneralController:
         self.page.theme_combo.setCurrentIndex(0 if theme_idx < 0 else theme_idx)
         self.page.theme_combo.blockSignals(False)
 
-        if WindowsAutostartManager.is_supported():
-            # This choice applies to every user, so the machine setting wins
-            # over an older value in this user's local config.
-            enabled = WindowsAutostartManager.get_enabled()
-            self.vm.set_config("startup.enabled", enabled)
-        else:
-            enabled = bool(self.vm.get_config("startup.enabled"))
         self.page.autostart_checkbox.blockSignals(True)
-        self.page.autostart_checkbox.setChecked(enabled)
+        self.page.autostart_checkbox.setChecked(bool(self.vm.get_config("startup.enabled")))
         self.page.autostart_checkbox.blockSignals(False)
         self.page.autostart_checkbox.setEnabled(WindowsAutostartManager.is_supported())
 
@@ -74,19 +67,16 @@ class GeneralController:
             return
 
         enabled = bool(self.vm.get_config("startup.enabled"))
-        previous = WindowsAutostartManager.get_enabled()
-        if enabled == previous:
-            return
         ok, error = WindowsAutostartManager.set_enabled(enabled)
         if ok:
             return
 
         # The settings model is saved before this signal is emitted. Restore
         # the previous persisted value when Windows rejects service setup.
-        self.vm.set_config("startup.enabled", previous)
+        self.vm.set_config("startup.enabled", not enabled)
         self.vm.model.save_config()
         self.page.autostart_checkbox.blockSignals(True)
-        self.page.autostart_checkbox.setChecked(previous)
+        self.page.autostart_checkbox.setChecked(not enabled)
         self.page.autostart_checkbox.blockSignals(False)
 
         i18n = get_i18n(self.vm.get_config("ui.language"))
