@@ -42,8 +42,8 @@ To stop it early, click the stop button on the call alert screen.
 
 ## Start Automatically and Use the System Tray
 
-In **Settings → General**, enable **Start automatically at login** and save the settings. BlinkCall registers a Windows watchdog service that starts the app in each active user session and restarts it after an unexpected exit or forced termination. Enabling or disabling this feature requires running BlinkCall as an administrator.
+The packaged Windows app enables **Start automatically when any user logs in** by default. On first launch, BlinkCall requests Windows administrator approval to register its watchdog service. The service starts the app in each active user session and restarts it after an unexpected exit or forced termination. Before approving the prompt, place the app in a fixed location that all users can read but ordinary users cannot modify. Each user's settings are stored in that user's Windows application data directory.
 
 After startup, BlinkCall remains available in the system tray. Closing the window hides it to the tray; right-click the tray icon to show the window again or exit the application.
 
-To disable automatic startup, clear **Start automatically at login** and save the settings.
+To disable automatic startup, clear **Start automatically when any user logs in** under **Settings → General** and save. Windows requests administrator approval again. This switch applies to every user of the computer. On the first launch after upgrading, an older disabled setting is migrated to the new enabled default; a later manual choice to disable it is retained.
