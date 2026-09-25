@@ -39,8 +39,9 @@ def create_page(name, main_window, nav):
     main_window.add_page(name, view)
 
 
-def create_app():
-    app = QApplication(sys.argv)
+def create_app(app=None):
+    if app is None:
+        app = QApplication(sys.argv)
     app.setWindowIcon(QIcon(str(get_resource_path("assets", "icons", "eye.png"))))
 
     app_data_dir = QStandardPaths.writableLocation(QStandardPaths.AppDataLocation)
@@ -77,12 +78,27 @@ def create_app():
 
 
 if __name__ == "__main__":
-    app, window = create_app()
+    app = QApplication(sys.argv)
+    single_instance = None
+    if sys.platform == "win32":
+        from blink_call.core.windows_single_instance import WindowsSingleInstance
+
+        single_instance = WindowsSingleInstance(app)
+        if not single_instance.acquire():
+            sys.exit(0)
+
+    app, window = create_app(app)
     if "--background" in app.arguments() and window.tray_available:
         window.hide()
     else:
         window.show_window()
-    exit_code = app.exec()
+    if single_instance is not None:
+        single_instance.bind_window(window)
+    try:
+        exit_code = app.exec()
+    finally:
+        if single_instance is not None:
+            single_instance.close()
     if WATCHDOG_SUPERVISED_ARGUMENT in app.arguments() and window.user_requested_exit:
         exit_code = WATCHDOG_USER_EXIT_CODE
     sys.exit(exit_code)

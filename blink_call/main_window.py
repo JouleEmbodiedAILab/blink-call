@@ -72,7 +72,6 @@ class MainWindow(QWidget):
             not self._allow_close
             and self.tray_icon is not None
             and self.tray_icon.isVisible()
-            and not event.spontaneous()
         ):
             self.hide()
             event.ignore()
@@ -85,6 +84,10 @@ class MainWindow(QWidget):
         if self.tray_icon is not None:
             self.tray_icon.hide()
         super().closeEvent(event)
+        if event.isAccepted() and self.tray_icon is not None:
+            application = QApplication.instance()
+            if application is not None:
+                application.quit()
 
     @property
     def tray_available(self):
