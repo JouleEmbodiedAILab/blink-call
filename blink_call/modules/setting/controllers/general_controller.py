@@ -52,6 +52,8 @@ class GeneralController:
         self.page.autostart_status_label.setText(
             "" if WindowsAutostartManager.is_supported() else i18n["windows_only"]
         )
+        self.page.disclaimer_title.setText(i18n["disclaimer_title"])
+        self.page.disclaimer_text.setText(i18n["disclaimer_text"])
         self.on_manual_link_text_changed("user_manual")
 
     def on_manual_link_text_changed(self, key: str):

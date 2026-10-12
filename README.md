@@ -13,6 +13,9 @@
 <img src="https://img.shields.io/badge/License-MIT-success">
 </p>
 
+> [!WARNING]
+> **Disclaimer:** This tool is intended only to support caregiving and cannot replace human supervision. Do not reduce or omit necessary human supervision because you use this tool.
+
 ## 📘 Overview
 **Blink-Call** is an assistive calling system designed for ALS patients. It recognizes user-defined blink patterns from camera input and triggers visible and audio call alerts without requiring speech, hand movement, or physical touch.
 

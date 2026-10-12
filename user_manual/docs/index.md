@@ -6,6 +6,9 @@
 [第一次使用](first-use.md){ .md-button }
 [遇到问题](troubleshooting.md){ .md-button }
 
+!!! warning "免责声明"
+    本工具仅用于辅助看护，不能替代人工看护。请勿因使用本工具而减少或免除必要的人工看护。
+
 !!! note "适用版本"
     本手册适用于眨眼呼叫 v{{ blink_call_version }}。目前只有 Windows 版可以直接下载使用。
 

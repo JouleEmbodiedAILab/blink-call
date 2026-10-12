@@ -13,6 +13,8 @@
   </p>
 </div>
 
+> [!WARNING]
+> **免责声明：本工具仅用于辅助看护，不能替代人工看护。请勿因使用本工具而减少或免除必要的人工看护。**
 
 <video src="https://github.com/user-attachments/assets/2579037f-2dea-4fcf-aa7d-e905464cd1be" width="800" controls
   playsinline></video>

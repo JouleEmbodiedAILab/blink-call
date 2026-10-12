@@ -150,14 +150,19 @@ logs/
 *.build/
 *.dist/
 
-# Videos
-**/*.mp4
+
 
 # VSCode
 .vscode/
 
+*.mp4
+# Test File
+scripts/monitor_resources.py
 # Local Windows watchdog chaos/recovery test (not versioned)
 scripts/windows/test_watchdog_recovery.ps1
+# Local-only tooling output and resource-monitoring script
+/.trigger-tree/
+/scripts/windows/test_memory_leak.ps1
 # Custom
 configs/local_config.yaml
 user_manual/site/

@@ -91,4 +91,20 @@ class GeneralPage:
         layout.addLayout(autostart_row)
 
         layout.addWidget(HDividerLine())
+
+        self.disclaimer_frame = QFrame()
+        self.disclaimer_frame.setObjectName("settingDisclaimer")
+        disclaimer_layout = QVBoxLayout(self.disclaimer_frame)
+        disclaimer_layout.setContentsMargins(14, 12, 14, 12)
+        disclaimer_layout.setSpacing(6)
+
+        self.disclaimer_title = QLabel("Disclaimer")
+        self.disclaimer_title.setObjectName("settingDisclaimerTitle")
+        self.disclaimer_text = QLabel("")
+        self.disclaimer_text.setObjectName("settingDisclaimerText")
+        self.disclaimer_text.setWordWrap(True)
+        disclaimer_layout.addWidget(self.disclaimer_title)
+        disclaimer_layout.addWidget(self.disclaimer_text)
+        layout.addWidget(self.disclaimer_frame)
+
         layout.addStretch()

@@ -1,6 +1,8 @@
 I18N = {
     "zh": {
         "empty": "",
+        "disclaimer_title": "免责声明",
+        "disclaimer_text": "本工具仅用于辅助看护，不能替代人工看护。请勿因使用本工具而减少或免除必要的人工看护。",
         "user_manual": "用户手册",
         "user_manual_with_update": "检测到更新，请从用户手册处下载最新软件",
         "setting": "设置",
@@ -110,6 +112,8 @@ I18N = {
     },
     "en": {
         "empty": "",
+        "disclaimer_title": "Disclaimer",
+        "disclaimer_text": "This tool is intended only to support caregiving and cannot replace human supervision. Do not reduce or omit necessary human supervision because you use this tool.",
         "user_manual": "User Manual",
         "user_manual_with_update": "New version available, please download from the user manual.",
         "setting": "Settings",

@@ -194,6 +194,25 @@ QLabel#settingSubSectionTitle {
     color: #f3f4f6;
 }
 
+QFrame#settingDisclaimer {
+    background: #3b2a16;
+    border: 2px solid #d97706;
+    border-radius: 8px;
+}
+
+QLabel#settingDisclaimerTitle {
+    background: transparent;
+    color: #fed7aa;
+    font-size: 16px;
+    font-weight: 700;
+}
+
+QLabel#settingDisclaimerText {
+    background: transparent;
+    color: #ffedd5;
+    font-size: 14px;
+}
+
 QFrame#settingItemDivider {
     background: #4a4a4a;
     min-height: 1px;

@@ -2,6 +2,9 @@
 
 **Blink Call** is an assistive call system designed for ALS patients. The software uses a camera to recognize preset eye-open and eye-closed actions. After the blink sequence is completed, it plays an alert sound to help the patient notify family members or caregivers when help is needed.
 
+!!! warning "Disclaimer"
+    This tool is intended only to support caregiving and cannot replace human supervision. Do not reduce or omit necessary human supervision because you use this tool.
+
 ## Who This Is For
 
 - People who have difficulty speaking and cannot easily call out for help.
