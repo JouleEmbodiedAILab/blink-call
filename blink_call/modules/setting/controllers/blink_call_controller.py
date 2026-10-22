@@ -1,7 +1,3 @@
-from pathlib import Path
-
-from PySide6.QtCore import QUrl
-from PySide6.QtMultimedia import QSoundEffect
 from PySide6.QtWidgets import (
     QButtonGroup,
     QComboBox,
@@ -12,6 +8,8 @@ from PySide6.QtWidgets import (
 )
 
 from blink_call.core.model_files_manager import ModelFilesManager
+from blink_call.core.recovering_sound_effect import RecoveringSoundEffect
+from blink_call.core.resource_path import get_resource_path
 from blink_call.modules.i18n import get_i18n
 from blink_call.modules.setting.bindings import ConfigBinder
 from blink_call.widget import InteractionBlockOverlay, NoWheelSpinBox
@@ -31,7 +29,11 @@ class BlinkCallController:
         self.audio_file_values = [f"ring_{i:02d}.wav" for i in range(1, 11)]
         self.audio_duration_values = [10, 30, 60, 300, 600, 1800, 3600, -1]
         self.abnormal_alert_duration_values = [10, 30, 60, 300, 600, 1800, 3600]
-        self.preview_sound = QSoundEffect(setting_view)
+        self.preview_sound = RecoveringSoundEffect(
+            get_resource_path("assets", "audio", "ring_01.wav"),
+            setting_view,
+            component="audio_preview",
+        )
         self.model_files_manager = ModelFilesManager()
 
         self.bind()
@@ -373,14 +375,13 @@ class BlinkCallController:
         if not isinstance(file_name, str) or not file_name.strip():
             return
 
-        audio_path = Path("assets") / "audio" / file_name
+        audio_path = get_resource_path("assets", "audio", file_name)
         if not audio_path.exists():
             return
 
         self.preview_sound.stop()
-        self.preview_sound.setSource(QUrl.fromLocalFile(str(audio_path.resolve())))
-        self.preview_sound.setLoopCount(1)
-        self.preview_sound.setVolume(float(self.page.audio_volume_slider.value()) / 100.0)
+        self.preview_sound.set_source(audio_path)
+        self.preview_sound.set_volume(float(self.page.audio_volume_slider.value()) / 100.0)
         self.preview_sound.play()
 
     def stop_preview(self):

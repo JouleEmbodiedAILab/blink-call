@@ -4,7 +4,7 @@ from datetime import datetime
 from pathlib import Path
 
 import cv2
-from PySide6.QtCore import QObject, QTimer, QUrl, Signal
+from PySide6.QtCore import QObject, QTimer, Signal
 from PySide6.QtGui import QImage
 from PySide6.QtMultimedia import QMediaDevices, QSoundEffect
 
@@ -64,11 +64,13 @@ class HomeViewModel(QObject):
         self.auto_alarm_monitor_timer.setInterval(250)
         self.auto_alarm_monitor_timer.timeout.connect(self._on_auto_alarm_monitor_tick)
 
-        self.call_sound_effect = QSoundEffect(self)
-        self.call_sound_effect.setLoopCount(int(QSoundEffect.Loop.Infinite.value))
-        self.call_sound_effect.statusChanged.connect(self._on_call_audio_status_changed)
-        self.call_sound_effect.loadedChanged.connect(self._on_call_audio_loaded_changed)
-        self.call_sound_effect.playingChanged.connect(self._on_call_audio_playing_changed)
+        self.call_sound_player = RecoveringSoundEffect(
+            get_resource_path("assets", "audio", "ring_01.wav"),
+            self,
+            loop_count=QSoundEffect.Loop.Infinite.value,
+            component="call_alert",
+        )
+        self.call_sound_player.diagnostic.connect(self.show_debug_msg.emit)
         self.audio_media_devices = QMediaDevices(self)
         self.audio_media_devices.audioOutputsChanged.connect(self._on_audio_outputs_changed)
         self.stage_prompt_sound_player = RecoveringSoundEffect(
@@ -80,7 +82,7 @@ class HomeViewModel(QObject):
         self.call_sound_stop_timer.setSingleShot(True)
         self.call_sound_stop_timer.timeout.connect(self.stop_blink_call_audio)
 
-        self._record_call_audio_state("player_initialized")
+        self.call_sound_player.log_state("player_initialized")
         self._record_audio_outputs("outputs_initialized")
 
     def _initialize_vars(self):
@@ -463,36 +465,17 @@ class HomeViewModel(QObject):
         if should_alert:
             file_name = self.setting_vm.get_config("blink_call.audio.file")
             if isinstance(file_name, str) and file_name.strip():
-                audio_path = Path("assets") / "audio" / file_name
+                audio_path = get_resource_path("assets", "audio", file_name)
                 volume = int(self.setting_vm.get_config("blink_call.audio.volume"))
                 volume = max(0, min(100, volume))
-                self.call_sound_effect.setVolume(float(volume) / 100.0)
-
-                source = QUrl.fromLocalFile(str(audio_path.resolve()))
-                source_changed = self.call_sound_effect.source() != source
-                if source_changed:
-                    self.call_sound_effect.setSource(source)
-
-                if not self.call_sound_effect.isPlaying() or source_changed:
-                    self.call_sound_effect.stop()
-                    log_audio_status(
-                        "call_alert",
-                        "play_requested",
-                        source=audio_path.resolve(),
-                        source_exists=audio_path.is_file(),
-                        source_changed=source_changed,
-                        volume=volume,
-                        auto_alarm=auto_alarm_audible,
-                    )
-                    self.call_sound_effect.play()
-                    QTimer.singleShot(500, lambda source=source: self._verify_call_audio_started(source))
-                else:
-                    self._record_call_audio_state("play_request_refreshed")
+                self.call_sound_player.set_source(audio_path)
+                self.call_sound_player.set_volume(float(volume) / 100.0)
+                self.call_sound_player.play()
             else:
+                self.call_sound_player.stop()
                 log_audio_status("call_alert", "play_skipped", reason="audio_file_not_configured")
         else:
-            self._record_call_audio_state("stop_requested")
-            self.call_sound_effect.stop()
+            self.call_sound_player.stop()
 
         if self.is_call_audio_playing != should_alert:
             self.is_call_audio_playing = should_alert
@@ -515,35 +498,6 @@ class HomeViewModel(QObject):
         audio_logger.info("stage_prompt_requested")
         log_audio_status("stage_prompt", "play_requested", volume=volume)
         self.stage_prompt_sound_player.play()
-
-    def _on_call_audio_status_changed(self):
-        self._record_call_audio_state("status_changed")
-
-    def _on_call_audio_loaded_changed(self):
-        self._record_call_audio_state("loaded_changed")
-
-    def _on_call_audio_playing_changed(self):
-        self._record_call_audio_state("playing_changed")
-
-    def _verify_call_audio_started(self, source: QUrl):
-        if self.call_sound_effect.source() != source:
-            return
-        self._record_call_audio_state("start_check")
-
-    def _record_call_audio_state(self, event: str):
-        effect = self.call_sound_effect
-        source = effect.source()
-        source_path = source.toLocalFile() or source.toString()
-        log_audio_status(
-            "call_alert",
-            event,
-            status=getattr(effect.status(), "name", str(effect.status())),
-            loaded=effect.isLoaded(),
-            playing=effect.isPlaying(),
-            source=source_path or "none",
-            tracked_playing=getattr(self, "is_call_audio_playing", False),
-            volume=f"{effect.volume():.2f}",
-        )
 
     def _on_audio_outputs_changed(self):
         self._record_audio_outputs("outputs_changed")

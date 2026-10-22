@@ -11,7 +11,7 @@ audio_logger = logging.getLogger("blink_call.audio")
 
 
 class RecoveringSoundEffect(QObject):
-    """Play a short sound effect and recover from transient backend failures."""
+    """Play a sound effect and recover from transient backend failures."""
 
     diagnostic = Signal(str)
 
@@ -20,12 +20,15 @@ class RecoveringSoundEffect(QObject):
         source_path: Path,
         parent=None,
         retry_delays_ms=(100, 200, 200),
-        loading_timeout_ms=500,
+        loading_timeout_ms=2000,
         start_timeout_ms=150,
         _effect_factory=None,
         _scheduler=None,
         _media_devices=None,
         _default_audio_output=None,
+        *,
+        loop_count=1,
+        component="stage_prompt",
     ):
         super().__init__(parent)
         self.source_path = Path(source_path).resolve()
@@ -33,6 +36,9 @@ class RecoveringSoundEffect(QObject):
         self.retry_delays_ms = tuple(max(0, int(delay)) for delay in retry_delays_ms)
         self.loading_timeout_ms = max(1, int(loading_timeout_ms))
         self.start_timeout_ms = max(1, int(start_timeout_ms))
+        self._loop_count = int(loop_count)
+        self._continuous = self._loop_count == int(QSoundEffect.Loop.Infinite.value)
+        self._component = component
         self._effect_factory = _effect_factory or QSoundEffect
         self._scheduler = _scheduler or QTimer.singleShot
         self._default_audio_output = _default_audio_output or QMediaDevices.defaultAudioOutput
@@ -46,6 +52,11 @@ class RecoveringSoundEffect(QObject):
         self._retry_attempt = 0
         self._retry_scheduled = False
         self._loading_wait_key = None
+        self._play_requested = False
+
+        self._monitor_timer = QTimer(self)
+        self._monitor_timer.setInterval(2000)
+        self._monitor_timer.timeout.connect(self._monitor_playback)
 
         if _media_devices is False:
             self._media_devices = None
@@ -54,6 +65,15 @@ class RecoveringSoundEffect(QObject):
             self._media_devices.audioOutputsChanged.connect(self._on_audio_outputs_changed)
 
         self._create_effect("initial")
+
+    def set_source(self, source_path: Path):
+        source_path = Path(source_path).resolve()
+        if source_path == self.source_path:
+            return
+        self.stop()
+        self.source_path = source_path
+        self.source_url = QUrl.fromLocalFile(str(source_path))
+        self._create_effect("source_changed")
 
     def set_volume(self, volume: float):
         self._volume = max(0.0, min(1.0, float(volume)))
@@ -66,6 +86,9 @@ class RecoveringSoundEffect(QObject):
             self._emit_diagnostic(f"play_coalesced; request={self._request_id}")
             return
 
+        if self._continuous and self._play_requested and self._effect.isPlaying():
+            return
+
         self._request_id += 1
         request_id = self._request_id
         self._pending_play = True
@@ -73,19 +96,26 @@ class RecoveringSoundEffect(QObject):
         self._retry_attempt = 0
         self._retry_scheduled = False
         self._loading_wait_key = None
+        self._play_requested = True
         self._emit_diagnostic(f"play_requested; request={request_id}")
 
         if not self.source_path.is_file():
             self._pending_play = False
-            audio_logger.warning("stage_prompt_failed reason=source_missing source=%s", self.source_path)
+            self._play_requested = False
+            self._monitor_timer.stop()
+            audio_logger.warning("%s_failed reason=source_missing source=%s", self._component, self.source_path)
             self._emit_diagnostic(f"play_skipped; reason=source_missing; source={self.source_path}")
             return
 
+        if self._continuous:
+            self._monitor_timer.start()
         self._attempt_play(request_id)
 
     def stop(self):
         self._emit_diagnostic(f"play_stopped; request={self._request_id}")
         self._request_id += 1
+        self._play_requested = False
+        self._monitor_timer.stop()
         self._pending_play = False
         self._awaiting_start = False
         self._retry_scheduled = False
@@ -95,16 +125,19 @@ class RecoveringSoundEffect(QObject):
 
     def _create_effect(self, reason: str):
         previous_effect = self._effect
+        # Invalidate callbacks before stop(), which may emit playingChanged
+        # synchronously from the old backend.
+        self._generation += 1
+        generation = self._generation
+        self._effect = None
         if previous_effect is not None:
             previous_effect.stop()
             if hasattr(previous_effect, "deleteLater"):
                 previous_effect.deleteLater()
 
-        self._generation += 1
-        generation = self._generation
         effect = self._effect_factory(self)
         self._effect = effect
-        effect.setLoopCount(1)
+        effect.setLoopCount(self._loop_count)
         effect.setVolume(self._volume)
         effect.statusChanged.connect(lambda effect=effect: self._on_status_changed(effect, generation))
         effect.loadedChanged.connect(lambda effect=effect: self._on_status_changed(effect, generation))
@@ -179,7 +212,7 @@ class RecoveringSoundEffect(QObject):
         self._awaiting_start = False
         self._retry_scheduled = False
         self._loading_wait_key = None
-        audio_logger.info("stage_prompt_started request=%s generation=%s", request_id, self._generation)
+        audio_logger.info("%s_started request=%s generation=%s", self._component, request_id, self._generation)
         self._emit_diagnostic(f"play_started; request={request_id}; generation={self._generation}")
 
     def _wait_for_loading(self, effect, generation: int, request_id: int):
@@ -210,7 +243,8 @@ class RecoveringSoundEffect(QObject):
             self._awaiting_start = False
             self._loading_wait_key = None
             audio_logger.warning(
-                "stage_prompt_failed request=%s reason=%s attempts=%s source=%s",
+                "%s_failed request=%s reason=%s attempts=%s source=%s",
+                self._component,
                 request_id,
                 reason,
                 self._retry_attempt,
@@ -259,19 +293,45 @@ class RecoveringSoundEffect(QObject):
     def _on_playing_changed(self, effect, generation: int):
         if effect is not self._effect or generation != self._generation:
             return
+        self.log_state("playing_changed")
         if effect.isPlaying() and self._pending_play:
             self._mark_started(self._request_id)
 
     def _on_audio_outputs_changed(self):
-        had_pending_play = self._pending_play
+        resume_play = self._pending_play or (self._continuous and self._play_requested)
         request_id = self._request_id
+        self._pending_play = resume_play
         self._retry_attempt = 0
         self._retry_scheduled = False
         self._loading_wait_key = None
         self._awaiting_start = False
         self._create_effect("audio_outputs_changed")
-        if had_pending_play:
+        if resume_play:
             self._attempt_play(request_id)
+
+    def _monitor_playback(self):
+        if not self._continuous or not self._play_requested or self._pending_play:
+            return
+        if self._effect.status() == QSoundEffect.Status.Ready and self._effect.isPlaying():
+            return
+        # A loop can stop after its initial successful start (device removal,
+        # suspend/resume, or a backend error). Recreate the sink while the
+        # caller still requests an alarm; stop() cancels all further recovery.
+        self._create_effect("playback_interrupted")
+        self.play()
+
+    def log_state(self, event: str):
+        effect = self._effect
+        log_audio_status(
+            self._component,
+            event,
+            status=self._status_name(effect.status()),
+            loaded=effect.isLoaded(),
+            playing=effect.isPlaying(),
+            source=self.source_path,
+            requested=self._play_requested,
+            volume=f"{self._volume:.2f}",
+        )
 
     def _is_current(self, effect, generation: int, request_id: int) -> bool:
         return (
@@ -309,5 +369,5 @@ class RecoveringSoundEffect(QObject):
         return getattr(status, "name", str(status))
 
     def _emit_diagnostic(self, text: str):
-        log_audio_status("stage_prompt", "state", message=text)
-        self.diagnostic.emit(f"[StagePromptAudio] {text}")
+        log_audio_status(self._component, "state", message=text)
+        self.diagnostic.emit(f"[{self._component}] {text}")

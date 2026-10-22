@@ -4,6 +4,7 @@ from pathlib import Path
 from blink_call.utils.helper import Helper
 
 LOCAL_CONFIG_PATH = "configs/local_config.yaml"
+STARTUP_DEFAULT_POLICY_VERSION = 2
 
 
 class ConfigManager:
@@ -19,7 +20,7 @@ class ConfigManager:
                 "remote": {"ip": "0.0.0.0", "port": 17925},
             },
             "local_service": {"camera_id": 0, "port": 17925},
-            "startup": {"enabled": False},
+            "startup": {"enabled": False, "default_policy_version": STARTUP_DEFAULT_POLICY_VERSION},
             "recording": {"max_duration_min": 1, "local_dir": default_log_dir},
             "blink_call": {
                 "enabled": True,
@@ -60,6 +61,14 @@ class ConfigManager:
         path = Path(LOCAL_CONFIG_PATH)
         if path.exists():
             local_config = Helper.read_yaml(path)
+            startup = local_config.get("startup")
+            if isinstance(startup, dict) and str(startup.get("default_policy_version")) == "1":
+                # Version 1 automatically enabled the watchdog on upgrade.
+                # Retire that default without configuring a Windows service
+                # or writing settings during application startup. A later
+                # explicit save persists version 2 and the user's choice.
+                startup["enabled"] = False
+                startup["default_policy_version"] = STARTUP_DEFAULT_POLICY_VERSION
             return Helper.deep_merge_dict(default_config, local_config)
 
         cls.save_local_config(default_config)

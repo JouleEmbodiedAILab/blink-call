@@ -1,4 +1,5 @@
 import logging
+import sys
 import threading
 import time
 from enum import Enum
@@ -33,6 +34,7 @@ class LocalCameraCapture:
         stale_frame_timeout_s: float = 1.0,
         reconnect_backoff_s=(0.5, 1.0, 2.0, 5.0),
         stop_timeout_s: float = 2.0,
+        startup_timeout_s: float = 3.0,
     ):
         self.camera_id = int(camera_id)
         self.interval = max(0.0, float(interval))
@@ -49,6 +51,15 @@ class LocalCameraCapture:
         self.stale_frame_timeout_s = max(0.0, float(stale_frame_timeout_s))
         self.reconnect_backoff_s = tuple(max(0.0, float(value)) for value in reconnect_backoff_s) or (0.5,)
         self.stop_timeout_s = max(0.0, float(stop_timeout_s))
+        self.startup_timeout_s = max(0.0, float(startup_timeout_s))
+        # CAP_ANY normally selects MSMF on Windows. Some cameras open through
+        # that backend but never deliver frames, so try DirectShow first and
+        # rotate backends if an opened handle cannot produce its first frame.
+        self._camera_backends = (
+            (cv2.CAP_DSHOW, cv2.CAP_MSMF, cv2.CAP_ANY)
+            if sys.platform == "win32" else (cv2.CAP_ANY,)
+        )
+        self._backend_indices = {}
 
         self.cap = None
         self.running = False
@@ -237,6 +248,7 @@ class LocalCameraCapture:
 
                 first_failure_at = None
                 frame_received_from_handle = False
+                first_frame_started_at = time.monotonic()
                 try:
                     while not self._stop_event.is_set():
                         read_started_at = time.monotonic()
@@ -278,6 +290,15 @@ class LocalCameraCapture:
                         if target_camera_id == self.camera_id:
                             primary_unstable_since = primary_unstable_since or read_started_at
                             primary_recovery_started_at = None
+                        # Opening a camera is not the same as having a frame.
+                        # Fast initial read failures must not close the handle
+                        # every ~50 ms before the device has time to warm up.
+                        if (
+                            not frame_received_from_handle
+                            and now - first_frame_started_at < self.startup_timeout_s
+                        ):
+                            self._stop_event.wait(max(self.interval, 0.01))
+                            continue
                         failures = self._record_read_failure(read_error)
                         if failures == 1:
                             logger.warning(
@@ -307,6 +328,9 @@ class LocalCameraCapture:
 
                 if self._stop_event.is_set():
                     break
+
+                if not frame_received_from_handle:
+                    self._advance_backend(target_camera_id)
 
                 now = time.monotonic()
                 target_unavailable_since = target_unavailable_since or now
@@ -351,25 +375,45 @@ class LocalCameraCapture:
             logger.info("camera_stopped primary_id=%s", self.camera_id)
 
     def _open_camera(self, camera_id, attempt):
-        logger.info("camera_open_attempt camera_id=%s attempt=%s", camera_id, attempt)
-        cap = None
-        try:
-            cap = cv2.VideoCapture(camera_id)
-            if cap is not None and cap.isOpened():
-                return cap, None
-            error = "VideoCapture.isOpened() returned false"
-        except Exception as exc:
-            error = f"{type(exc).__name__}: {exc}"
+        error = "camera opening cancelled"
+        for _ in self._camera_backends:
+            if self._stop_event.is_set():
+                break
+            backend = self._camera_backends[self._backend_indices.get(camera_id, 0)]
+            logger.info(
+                "camera_open_attempt camera_id=%s attempt=%s backend=%s",
+                camera_id, attempt, backend,
+            )
+            cap = None
+            try:
+                cap = (
+                    cv2.VideoCapture(camera_id) if backend == cv2.CAP_ANY
+                    else cv2.VideoCapture(camera_id, backend)
+                )
+                if cap is not None and cap.isOpened():
+                    return cap, None
+                error = "VideoCapture.isOpened() returned false"
+            except Exception as exc:
+                error = f"{type(exc).__name__}: {exc}"
 
-        if cap is not None:
-            self._safe_release(cap, camera_id, "unknown")
+            logger.warning(
+                "camera_backend_failed camera_id=%s backend=%s error=%s",
+                camera_id, backend, error,
+            )
+            if cap is not None:
+                self._safe_release(cap, camera_id, str(backend))
+            self._advance_backend(camera_id)
         return None, error
+
+    def _advance_backend(self, camera_id):
+        current = self._backend_indices.get(camera_id, 0)
+        self._backend_indices[camera_id] = (current + 1) % len(self._camera_backends)
 
     @staticmethod
     def _read_camera(cap):
         try:
             ok, frame = cap.read()
-            if not ok or frame is None:
+            if not ok or frame is None or getattr(frame, "size", 1) == 0:
                 return False, None, "VideoCapture.read() returned no frame"
             return True, frame, None
         except Exception as exc:

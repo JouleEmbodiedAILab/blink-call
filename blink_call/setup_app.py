@@ -59,6 +59,7 @@ def create_app(app=None):
 
     # Initialize the main window
     main_window = MainWindow()
+    app.aboutToQuit.connect(main_window.shutdown)
     nav = Navigation(main_window)
 
     # Add pages
@@ -71,8 +72,7 @@ def create_app(app=None):
     # Default page
     nav.to("home")
 
-    if main_window.tray_available:
-        app.setQuitOnLastWindowClosed(False)
+    app.setQuitOnLastWindowClosed(not main_window.close_to_tray)
 
     return app, main_window
 

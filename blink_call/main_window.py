@@ -1,3 +1,5 @@
+import sys
+
 from PySide6.QtGui import QAction, QIcon
 from PySide6.QtWidgets import (
     QApplication,
@@ -29,6 +31,7 @@ class MainWindow(QWidget):
         self.views = {}
         self._allow_close = False
         self._user_requested_exit = False
+        self._shutdown_started = False
         self.tray_icon = None
         self.tray_show_action = None
         self.tray_exit_action = None
@@ -70,28 +73,39 @@ class MainWindow(QWidget):
     def closeEvent(self, event):
         if (
             not self._allow_close
-            and self.tray_icon is not None
+            and self.close_to_tray
             and self.tray_icon.isVisible()
         ):
             self.hide()
             event.ignore()
             return
 
+        self.shutdown()
+        super().closeEvent(event)
+        if event.isAccepted():
+            application = QApplication.instance()
+            if application is not None:
+                application.quit()
+
+    def shutdown(self):
+        """Release background work for window, menu, and system quit paths."""
+        if self._shutdown_started:
+            return
+        self._shutdown_started = True
         for view in self.views.values():
             vm = getattr(view, "vm", None)
             if hasattr(vm, "stop_all"):
                 vm.stop_all()
         if self.tray_icon is not None:
             self.tray_icon.hide()
-        super().closeEvent(event)
-        if event.isAccepted() and self.tray_icon is not None:
-            application = QApplication.instance()
-            if application is not None:
-                application.quit()
 
     @property
     def tray_available(self):
         return self.tray_icon is not None
+
+    @property
+    def close_to_tray(self):
+        return sys.platform == "win32" and self.tray_available
 
     @property
     def user_requested_exit(self):

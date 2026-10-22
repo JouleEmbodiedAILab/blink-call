@@ -1,3 +1,5 @@
+import logging
+
 from PySide6.QtCore import QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import QMessageBox
@@ -12,6 +14,7 @@ class GeneralController:
         self.setting_view = setting_view
         self.vm = setting_view.vm
         self.page = setting_view.general_page
+        self._applied_autostart_enabled = bool(self.vm.get_config("startup.enabled"))
 
         self.bind()
 
@@ -69,16 +72,27 @@ class GeneralController:
             return
 
         enabled = bool(self.vm.get_config("startup.enabled"))
-        ok, error = WindowsAutostartManager.set_enabled(enabled)
+        previous = self._applied_autostart_enabled
+        # Saving unrelated settings must not install/remove a service or
+        # require administrator privileges when this switch is unchanged.
+        if enabled == previous:
+            return
+
+        try:
+            ok, error = WindowsAutostartManager.set_enabled(enabled)
+        except Exception as exc:
+            logging.getLogger("blink_call.watchdog").exception("watchdog_configuration_failed")
+            ok, error = False, str(exc)
         if ok:
+            self._applied_autostart_enabled = enabled
             return
 
         # The settings model is saved before this signal is emitted. Restore
         # the previous persisted value when Windows rejects service setup.
-        self.vm.set_config("startup.enabled", not enabled)
+        self.vm.set_config("startup.enabled", previous)
         self.vm.model.save_config()
         self.page.autostart_checkbox.blockSignals(True)
-        self.page.autostart_checkbox.setChecked(not enabled)
+        self.page.autostart_checkbox.setChecked(previous)
         self.page.autostart_checkbox.blockSignals(False)
 
         i18n = get_i18n(self.vm.get_config("ui.language"))
