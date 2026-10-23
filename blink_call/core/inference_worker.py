@@ -1,4 +1,5 @@
 import hashlib
+import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -563,8 +564,14 @@ class InferenceWorker(QThread):
                     return self.current_progress_ratio(self.blink_pattern), False, False
 
                 completed_rule = self.blink_pattern[self.progress_step_idx]
-                if bool(completed_rule.get("sound_prompt")):
-                    stage_sound_prompt_flag = True
+                stage_sound_prompt_flag = bool(completed_rule.get("sound_prompt"))
+                logging.getLogger("blink_call.audio").info(
+                    "blink_stage_completed step=%s total_steps=%s state=%s sound_prompt=%s",
+                    self.progress_step_idx + 1,
+                    len(self.blink_pattern),
+                    completed_rule.get("state"),
+                    stage_sound_prompt_flag,
+                )
                 self.progress_step_idx += 1
 
                 if self.progress_step_idx >= len(self.blink_pattern):

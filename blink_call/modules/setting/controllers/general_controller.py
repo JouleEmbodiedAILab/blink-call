@@ -1,20 +1,27 @@
 import logging
+import threading
 
-from PySide6.QtCore import QUrl
+from PySide6.QtCore import QObject, QUrl, Signal, Slot
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import QMessageBox
 
+from blink_call.core.config_manager import ConfigManager
 from blink_call.core.windows_autostart import WindowsAutostartManager
 from blink_call.modules.i18n import get_i18n
 from blink_call.modules.setting.bindings import ConfigBinder
 
 
-class GeneralController:
+class GeneralController(QObject):
+    autostart_configured = Signal(bool, str)
+
     def __init__(self, setting_view):
+        super().__init__(setting_view)
         self.setting_view = setting_view
         self.vm = setting_view.vm
         self.page = setting_view.general_page
         self._applied_autostart_enabled = bool(self.vm.get_config("startup.enabled"))
+        self._pending_autostart_enabled = None
+        self.autostart_configured.connect(self._on_autostart_configured)
 
         self.bind()
 
@@ -41,7 +48,9 @@ class GeneralController:
         self.page.autostart_checkbox.blockSignals(True)
         self.page.autostart_checkbox.setChecked(bool(self.vm.get_config("startup.enabled")))
         self.page.autostart_checkbox.blockSignals(False)
-        self.page.autostart_checkbox.setEnabled(WindowsAutostartManager.is_supported())
+        self.page.autostart_checkbox.setEnabled(
+            WindowsAutostartManager.is_supported() and self._pending_autostart_enabled is None
+        )
 
         i18n = get_i18n(self.vm.get_config("ui.language"))
 
@@ -68,7 +77,7 @@ class GeneralController:
         QDesktopServices.openUrl(QUrl("https://JouleEmbodiedAILab.github.io/blink-call/"))
 
     def apply_autostart(self):
-        if not WindowsAutostartManager.is_supported():
+        if not WindowsAutostartManager.is_supported() or self._pending_autostart_enabled is not None:
             return
 
         enabled = bool(self.vm.get_config("startup.enabled"))
@@ -78,11 +87,28 @@ class GeneralController:
         if enabled == previous:
             return
 
+        # UAC and SCM startup can take time. Keep the Qt event loop available
+        # for camera processing, audio alerts, and window activation.
+        self._pending_autostart_enabled = enabled
+        self.setting_view.setEnabled(False)
+        self.page.autostart_checkbox.setEnabled(False)
+        threading.Thread(target=self._configure_autostart, args=(enabled,), daemon=True).start()
+
+    def _configure_autostart(self, enabled):
         try:
             ok, error = WindowsAutostartManager.set_enabled(enabled)
         except Exception as exc:
             logging.getLogger("blink_call.watchdog").exception("watchdog_configuration_failed")
             ok, error = False, str(exc)
+        self.autostart_configured.emit(ok, error)
+
+    @Slot(bool, str)
+    def _on_autostart_configured(self, ok, error):
+        enabled = self._pending_autostart_enabled
+        previous = self._applied_autostart_enabled
+        self._pending_autostart_enabled = None
+        self.setting_view.setEnabled(True)
+        self.page.autostart_checkbox.setEnabled(WindowsAutostartManager.is_supported())
         if ok:
             self._applied_autostart_enabled = enabled
             return
@@ -90,7 +116,8 @@ class GeneralController:
         # The settings model is saved before this signal is emitted. Restore
         # the previous persisted value when Windows rejects service setup.
         self.vm.set_config("startup.enabled", previous)
-        self.vm.model.save_config()
+        self.vm.model.local_config.setdefault("startup", {})["enabled"] = previous
+        ConfigManager.update_local_config({"startup": {"enabled": previous}})
         self.page.autostart_checkbox.blockSignals(True)
         self.page.autostart_checkbox.setChecked(previous)
         self.page.autostart_checkbox.blockSignals(False)

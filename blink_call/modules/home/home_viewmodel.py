@@ -83,6 +83,7 @@ class HomeViewModel(QObject):
         self.call_sound_stop_timer.timeout.connect(self.stop_blink_call_audio)
 
         self.call_sound_player.log_state("player_initialized")
+        self.stage_prompt_sound_player.log_state("player_initialized")
         self._record_audio_outputs("outputs_initialized")
 
     def _initialize_vars(self):
@@ -91,6 +92,13 @@ class HomeViewModel(QObject):
             self.setting_vm.get_config("debug_log.local_dir") or str(Path.home() / "Desktop"),
             enabled=self.debug_mode,
         )
+        pattern = self.setting_vm.get_config("blink_call.pattern")
+        prompt_steps = [
+            index + 1
+            for index, rule in enumerate(pattern)
+            if isinstance(rule, dict) and bool(rule.get("sound_prompt"))
+        ]
+        audio_logger.info("stage_prompt_configuration enabled_steps=%s total_steps=%s", prompt_steps, len(pattern))
         self.latest_infer_result = None
 
         self.stat_fps_interval = 10.0

@@ -1,4 +1,5 @@
 import logging
+import wave
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QTimer, QUrl, Signal
@@ -154,6 +155,16 @@ class RecoveringSoundEffect(QObject):
             f"effect_created; reason={reason}; generation={generation}; "
             f"source_exists={self.source_path.is_file()}; device={self._device_description(device)}"
         )
+        # Keep the basic evidence in the normal application log as well. A
+        # packaged Windows GUI has no console, and detailed audio logging may
+        # not have been enabled when an initial load failure occurred.
+        audio_logger.info(
+            "%s_backend_created reason=%s generation=%s source=%s exists=%s device=%s",
+            self._component, reason, generation, self.source_path,
+            self.source_path.is_file(), self._device_description(device),
+        )
+        if reason in ("initial", "source_changed"):
+            self._log_source_format()
 
     def _attempt_play(self, request_id: int):
         if request_id != self._request_id or not self._pending_play or self._effect is None:
@@ -287,6 +298,12 @@ class RecoveringSoundEffect(QObject):
             f"status_changed; generation={generation}; status={self._status_name(effect.status())}; "
             f"loaded={effect.isLoaded()}; playing={effect.isPlaying()}"
         )
+        if effect.status() == QSoundEffect.Status.Error:
+            audio_logger.warning(
+                "%s_backend_error generation=%s source=%s device=%s",
+                self._component, generation, self.source_path,
+                self._device_description(self._get_default_audio_output()),
+            )
         if self._pending_play:
             self._attempt_play(self._request_id)
 
@@ -322,6 +339,11 @@ class RecoveringSoundEffect(QObject):
 
     def log_state(self, event: str):
         effect = self._effect
+        audio_logger.info(
+            "%s_state event=%s status=%s loaded=%s playing=%s requested=%s volume=%.2f source=%s",
+            self._component, event, self._status_name(effect.status()),
+            effect.isLoaded(), effect.isPlaying(), self._play_requested, self._volume, self.source_path,
+        )
         log_audio_status(
             self._component,
             event,
@@ -332,6 +354,17 @@ class RecoveringSoundEffect(QObject):
             requested=self._play_requested,
             volume=f"{self._volume:.2f}",
         )
+
+    def _log_source_format(self):
+        try:
+            with wave.open(str(self.source_path), "rb") as source:
+                audio_logger.info(
+                    "%s_source_format channels=%s sample_rate=%s sample_bytes=%s frames=%s compression=%s",
+                    self._component, source.getnchannels(), source.getframerate(),
+                    source.getsampwidth(), source.getnframes(), source.getcomptype(),
+                )
+        except (OSError, EOFError, wave.Error) as exc:
+            audio_logger.warning("%s_source_unreadable source=%s detail=%s", self._component, self.source_path, exc)
 
     def _is_current(self, effect, generation: int, request_id: int) -> bool:
         return (

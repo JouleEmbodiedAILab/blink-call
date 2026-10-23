@@ -10,21 +10,25 @@ Service Control Manager (SCM) separately restarts the watchdog itself.
 from __future__ import annotations
 
 import ctypes
-from ctypes import wintypes
-from dataclasses import dataclass
+import json
 import locale
 import logging
-from logging.handlers import RotatingFileHandler
 import os
-from pathlib import Path
 import subprocess
 import sys
+import tempfile
 import time
+from contextlib import contextmanager
+from ctypes import wintypes
+from dataclasses import dataclass
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
 
 
 logger = logging.getLogger("blink_call.watchdog")
 
 WATCHDOG_SERVICE_ARGUMENT = "--watchdog-service"
+WATCHDOG_CONFIGURE_ARGUMENT = "--watchdog-configure"
 WATCHDOG_SUPERVISED_ARGUMENT = "--watchdog-supervised"
 WATCHDOG_USER_EXIT_CODE = 0x4243
 
@@ -41,6 +45,23 @@ SERVICE_ACCEPT_SHUTDOWN = 0x00000004
 SERVICE_CONTROL_STOP = 0x00000001
 SERVICE_CONTROL_INTERROGATE = 0x00000004
 SERVICE_CONTROL_SHUTDOWN = 0x00000005
+SC_MANAGER_CONNECT = 0x00000001
+SC_MANAGER_CREATE_SERVICE = 0x00000002
+SERVICE_QUERY_STATUS = 0x00000004
+SERVICE_CHANGE_CONFIG = 0x00000002
+SERVICE_START = 0x00000010
+SERVICE_STOP = 0x00000020
+DELETE = 0x00010000
+SERVICE_AUTO_START = 0x00000002
+SERVICE_ERROR_NORMAL = 0x00000001
+SERVICE_CONFIG_DESCRIPTION = 1
+SERVICE_CONFIG_FAILURE_ACTIONS = 2
+SERVICE_CONFIG_FAILURE_ACTIONS_FLAG = 4
+SC_ACTION_RESTART = 1
+ERROR_SERVICE_ALREADY_RUNNING = 1056
+ERROR_SERVICE_DOES_NOT_EXIST = 1060
+ERROR_SERVICE_NOT_ACTIVE = 1062
+ERROR_SERVICE_MARKED_FOR_DELETE = 1072
 NO_ERROR = 0
 ERROR_CALL_NOT_IMPLEMENTED = 120
 WAIT_OBJECT_0 = 0
@@ -69,6 +90,48 @@ class SERVICE_STATUS(ctypes.Structure):
         ("dwServiceSpecificExitCode", wintypes.DWORD),
         ("dwCheckPoint", wintypes.DWORD),
         ("dwWaitHint", wintypes.DWORD),
+    ]
+
+
+class SERVICE_DESCRIPTIONW(ctypes.Structure):
+    _fields_ = [("lpDescription", wintypes.LPWSTR)]
+
+
+class SC_ACTION(ctypes.Structure):
+    _fields_ = [("Type", wintypes.DWORD), ("Delay", wintypes.DWORD)]
+
+
+class SERVICE_FAILURE_ACTIONSW(ctypes.Structure):
+    _fields_ = [
+        ("dwResetPeriod", wintypes.DWORD),
+        ("lpRebootMsg", wintypes.LPWSTR),
+        ("lpCommand", wintypes.LPWSTR),
+        ("cActions", wintypes.DWORD),
+        ("lpsaActions", ctypes.POINTER(SC_ACTION)),
+    ]
+
+
+class SERVICE_FAILURE_ACTIONS_FLAG(ctypes.Structure):
+    _fields_ = [("fFailureActionsOnNonCrashFailures", wintypes.BOOL)]
+
+
+class SHELLEXECUTEINFOW(ctypes.Structure):
+    _fields_ = [
+        ("cbSize", wintypes.DWORD),
+        ("fMask", wintypes.ULONG),
+        ("hwnd", wintypes.HWND),
+        ("lpVerb", wintypes.LPCWSTR),
+        ("lpFile", wintypes.LPCWSTR),
+        ("lpParameters", wintypes.LPCWSTR),
+        ("lpDirectory", wintypes.LPCWSTR),
+        ("nShow", ctypes.c_int),
+        ("hInstApp", wintypes.HINSTANCE),
+        ("lpIDList", wintypes.LPVOID),
+        ("lpClass", wintypes.LPCWSTR),
+        ("hkeyClass", wintypes.HKEY),
+        ("dwHotKey", wintypes.DWORD),
+        ("hIconOrMonitor", wintypes.HANDLE),
+        ("hProcess", wintypes.HANDLE),
     ]
 
 
@@ -174,6 +237,7 @@ class WindowsWatchdogManager:
     SERVICE_DESCRIPTION = "Keeps BlinkCall running in active user sessions."
     RECOVERY_RESET_SECONDS = 24 * 60 * 60
     LEGACY_TASK_NAME = "BlinkCall - AutoStart"
+    STATUS_TIMEOUT_SECONDS = 30
 
     @classmethod
     def is_supported(cls) -> bool:
@@ -183,9 +247,75 @@ class WindowsWatchdogManager:
     def set_enabled(cls, enabled: bool) -> tuple[bool, str]:
         if not cls.is_supported():
             return False, "The BlinkCall watchdog is available only on Windows."
+        elevated = cls._is_elevated()
+        logger.info("watchdog_configuration_requested enabled=%s elevated=%s pid=%s", enabled, elevated, os.getpid())
+        if not elevated:
+            return cls._configure_with_elevation(enabled)
+        return cls._set_enabled_elevated(enabled)
+
+    @classmethod
+    def _set_enabled_elevated(cls, enabled: bool) -> tuple[bool, str]:
         if not cls._is_elevated():
-            return False, "Administrator privileges are required to configure the BlinkCall watchdog."
-        return cls._install_and_start() if enabled else cls._stop_and_remove()
+            return False, "Windows did not grant administrator privileges to the watchdog configuration process."
+        try:
+            return cls._install_and_start() if enabled else cls._stop_and_remove()
+        except OSError as exc:
+            logger.exception("watchdog_configuration_failed enabled=%s", enabled)
+            return False, f"{exc}\n\nService log: {_service_log_path()}"
+
+    @classmethod
+    def _configure_with_elevation(cls, enabled: bool) -> tuple[bool, str]:
+        executable = cls._packaged_executable()
+        if executable is None:
+            return False, "The watchdog can be installed only from the packaged BlinkCall.exe build."
+
+        shell32 = ctypes.WinDLL("shell32", use_last_error=True)
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        shell32.ShellExecuteExW.argtypes = [ctypes.POINTER(SHELLEXECUTEINFOW)]
+        shell32.ShellExecuteExW.restype = wintypes.BOOL
+        kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+        kernel32.WaitForSingleObject.restype = wintypes.DWORD
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel32.CloseHandle.restype = wintypes.BOOL
+
+        # Use a separate entrypoint before Qt and single-instance activation.
+        # An elevated second GUI would otherwise just activate the existing
+        # non-elevated window and leave its effective privileges unchanged.
+        with tempfile.TemporaryDirectory(prefix="blinkcall-watchdog-") as directory:
+            result_path = Path(directory) / "result.json"
+            execute_info = SHELLEXECUTEINFOW()
+            execute_info.cbSize = ctypes.sizeof(execute_info)
+            execute_info.fMask = 0x00000040 | 0x00000100  # NOCLOSEPROCESS | NOASYNC
+            execute_info.lpVerb = "runas"
+            execute_info.lpFile = str(executable)
+            execute_info.lpParameters = subprocess.list2cmdline(
+                [WATCHDOG_CONFIGURE_ARGUMENT, "enable" if enabled else "disable", str(result_path)]
+            )
+            execute_info.lpDirectory = str(executable.parent)
+            execute_info.nShow = 0
+            with _shell_com_apartment():
+                if not shell32.ShellExecuteExW(ctypes.byref(execute_info)):
+                    if ctypes.get_last_error() == 1223:  # ERROR_CANCELLED
+                        return False, "Administrator authorization was cancelled. The watchdog setting was not changed."
+                    raise _win_error("ShellExecuteExW(runas)")
+            if not execute_info.hProcess:
+                return False, "Windows did not return a handle for the watchdog configuration process."
+            try:
+                if kernel32.WaitForSingleObject(execute_info.hProcess, 0xFFFFFFFF) != WAIT_OBJECT_0:
+                    raise _win_error("WaitForSingleObject(configuration)")
+            finally:
+                kernel32.CloseHandle(execute_info.hProcess)
+            try:
+                result = json.loads(result_path.read_text(encoding="utf-8"))
+                if isinstance(result, dict) and type(result.get("ok")) is bool and isinstance(result.get("error"), str):
+                    return result["ok"], result["error"]
+            except (OSError, ValueError):
+                logger.warning("watchdog_configuration_result_unavailable", exc_info=True)
+            return (
+                False,
+                "The elevated watchdog configuration process exited without a valid result.\n"
+                f"Service log: {_service_log_path()}",
+            )
 
     @classmethod
     def _install_and_start(cls) -> tuple[bool, str]:
@@ -196,83 +326,152 @@ class WindowsWatchdogManager:
                 "The watchdog can be installed only from the packaged BlinkCall.exe build.",
             )
 
-        sc = cls._sc_executable()
-        if sc is None:
-            return False, "sc.exe was not found."
+        api = _ServiceControlApi()
+        access = SERVICE_QUERY_STATUS | SERVICE_CHANGE_CONFIG | SERVICE_START | SERVICE_STOP | DELETE
+        with api.manager(create=True) as manager:
+            service = api.open_service(manager, cls.SERVICE_NAME, access)
+            created = service is None
+            if created:
+                service = api.advapi32.CreateServiceW(
+                    manager,
+                    cls.SERVICE_NAME,
+                    cls.SERVICE_DISPLAY_NAME,
+                    access,
+                    SERVICE_WIN32_OWN_PROCESS,
+                    SERVICE_AUTO_START,
+                    SERVICE_ERROR_NORMAL,
+                    service_command,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                if not service:
+                    raise _win_error("CreateServiceW")
+            try:
+                # Updating binPath alone leaves the old watchdog running. Stop
+                # it before changing the command and explicitly restore the
+                # LocalSystem account required by WTSQueryUserToken.
+                if not created:
+                    cls._stop_service(api, service)
+                    if not api.advapi32.ChangeServiceConfigW(
+                        service,
+                        SERVICE_WIN32_OWN_PROCESS,
+                        SERVICE_AUTO_START,
+                        SERVICE_ERROR_NORMAL,
+                        service_command,
+                        None,
+                        None,
+                        None,
+                        "LocalSystem",
+                        None,
+                        cls.SERVICE_DISPLAY_NAME,
+                    ):
+                        raise _win_error("ChangeServiceConfigW")
+                cls._configure_recovery(api, service)
+                if not api.advapi32.StartServiceW(service, 0, None):
+                    if ctypes.get_last_error() != ERROR_SERVICE_ALREADY_RUNNING:
+                        raise _win_error("StartServiceW")
+                cls._wait_for_state(api, service, SERVICE_RUNNING)
+            except Exception:
+                # Do not leave a new auto-start service behind when the UI
+                # rolls its checkbox back after a failed installation.
+                if created:
+                    try:
+                        cls._stop_service(api, service)
+                    except OSError:
+                        logger.warning("watchdog_install_rollback_stop_failed", exc_info=True)
+                    if not api.advapi32.DeleteService(service):
+                        logger.warning("watchdog_install_rollback_delete_failed error=%s", ctypes.get_last_error())
+                raise
+            finally:
+                api.advapi32.CloseServiceHandle(service)
 
-        existing = cls._run_sc(sc, "query", cls.SERVICE_NAME)
-        if existing.returncode == 0:
-            result = cls._run_sc(
-                sc,
-                "config",
-                cls.SERVICE_NAME,
-                "binPath=",
-                service_command,
-                "start=",
-                "auto",
-            )
-        else:
-            result = cls._run_sc(
-                sc,
-                "create",
-                cls.SERVICE_NAME,
-                "binPath=",
-                service_command,
-                "start=",
-                "auto",
-                "DisplayName=",
-                cls.SERVICE_DISPLAY_NAME,
-            )
-        if result.returncode != 0:
-            return False, cls._format_command_error(result)
-
-        for args in (
-            (
-                "failure",
-                cls.SERVICE_NAME,
-                "reset=",
-                str(cls.RECOVERY_RESET_SECONDS),
-                "actions=",
-                "restart/5000/restart/15000/restart/60000",
-            ),
-            ("failureflag", cls.SERVICE_NAME, "1"),
-            ("description", cls.SERVICE_NAME, cls.SERVICE_DESCRIPTION),
-        ):
-            result = cls._run_sc(sc, *args)
-            if result.returncode != 0:
-                return False, cls._format_command_error(result)
-
-        legacy_task_removed, error = cls._remove_legacy_task()
-        if not legacy_task_removed:
-            return False, error
-
-        result = cls._run_sc(sc, "start", cls.SERVICE_NAME)
-        if result.returncode != 0 and not cls._service_already_running(result):
-            return False, cls._format_command_error(result)
-
+        cls._cleanup_legacy_task()
         logger.info("watchdog_enabled service=%s", cls.SERVICE_NAME)
         return True, ""
 
     @classmethod
     def _stop_and_remove(cls) -> tuple[bool, str]:
-        sc = cls._sc_executable()
-        if sc is None:
-            return False, "sc.exe was not found."
+        api = _ServiceControlApi()
+        with api.manager() as manager:
+            try:
+                service = api.open_service(manager, cls.SERVICE_NAME, SERVICE_QUERY_STATUS | SERVICE_STOP | DELETE)
+            except OSError as exc:
+                if exc.errno != ERROR_SERVICE_MARKED_FOR_DELETE:
+                    raise
+                service = None
+            if service:
+                try:
+                    cls._stop_service(api, service)
+                    if not api.advapi32.DeleteService(service):
+                        if ctypes.get_last_error() != ERROR_SERVICE_MARKED_FOR_DELETE:
+                            raise _win_error("DeleteService")
+                finally:
+                    api.advapi32.CloseServiceHandle(service)
 
-        result = cls._run_sc(sc, "stop", cls.SERVICE_NAME)
-        if result.returncode != 0 and not cls._service_not_running_or_missing(result):
-            return False, cls._format_command_error(result)
-
-        result = cls._run_sc(sc, "delete", cls.SERVICE_NAME)
-        if result.returncode != 0 and not cls._service_not_running_or_missing(result):
-            return False, cls._format_command_error(result)
-
-        legacy_task_removed, error = cls._remove_legacy_task()
-        if not legacy_task_removed:
-            return False, error
-
+        cls._cleanup_legacy_task()
         logger.info("watchdog_disabled service=%s", cls.SERVICE_NAME)
         return True, ""
+
+    @classmethod
+    def _configure_recovery(cls, api, service) -> None:
+        actions = (SC_ACTION * 3)(
+            SC_ACTION(SC_ACTION_RESTART, 5_000),
+            SC_ACTION(SC_ACTION_RESTART, 15_000),
+            SC_ACTION(SC_ACTION_RESTART, 60_000),
+        )
+        recovery = SERVICE_FAILURE_ACTIONSW(cls.RECOVERY_RESET_SECONDS, None, None, len(actions), actions)
+        failure_flag = SERVICE_FAILURE_ACTIONS_FLAG(True)
+        description = SERVICE_DESCRIPTIONW(cls.SERVICE_DESCRIPTION)
+        for level, value in (
+            (SERVICE_CONFIG_FAILURE_ACTIONS, recovery),
+            (SERVICE_CONFIG_FAILURE_ACTIONS_FLAG, failure_flag),
+            (SERVICE_CONFIG_DESCRIPTION, description),
+        ):
+            if not api.advapi32.ChangeServiceConfig2W(service, level, ctypes.byref(value)):
+                raise _win_error(f"ChangeServiceConfig2W({level})")
+
+    @classmethod
+    def _stop_service(cls, api, service) -> None:
+        status = api.query_status(service)
+        if status.dwCurrentState == SERVICE_STOPPED:
+            return
+        if status.dwCurrentState == SERVICE_START_PENDING:
+            cls._wait_for_state(api, service, SERVICE_RUNNING)
+            status = api.query_status(service)
+        if status.dwCurrentState != SERVICE_STOP_PENDING:
+            if not api.advapi32.ControlService(service, SERVICE_CONTROL_STOP, ctypes.byref(status)):
+                if ctypes.get_last_error() != ERROR_SERVICE_NOT_ACTIVE:
+                    raise _win_error("ControlService(STOP)")
+        cls._wait_for_state(api, service, SERVICE_STOPPED)
+
+    @classmethod
+    def _wait_for_state(cls, api, service, target: int) -> None:
+        deadline = time.monotonic() + cls.STATUS_TIMEOUT_SECONDS
+        while True:
+            status = api.query_status(service)
+            if status.dwCurrentState == target:
+                return
+            if target == SERVICE_RUNNING and status.dwCurrentState == SERVICE_STOPPED:
+                raise OSError(
+                    status.dwWin32ExitCode or 1,
+                    "BlinkCall watchdog stopped during startup "
+                    f"(Win32={status.dwWin32ExitCode}, service={status.dwServiceSpecificExitCode}).",
+                )
+            if time.monotonic() >= deadline:
+                raise TimeoutError(
+                    f"Timed out waiting for BlinkCall watchdog state {target}; current={status.dwCurrentState}."
+                )
+            time.sleep(0.2)
+
+    @classmethod
+    def _cleanup_legacy_task(cls) -> None:
+        # Legacy task cleanup must not report a working service as failed.
+        removed, error = cls._remove_legacy_task()
+        if not removed:
+            logger.warning("legacy_task_cleanup_failed detail=%s", error)
 
     @classmethod
     def _service_command(cls) -> str | None:
@@ -304,35 +503,38 @@ class WindowsWatchdogManager:
     @staticmethod
     def _is_elevated() -> bool:
         try:
-            shell32 = ctypes.WinDLL("shell32", use_last_error=True)
-            return bool(shell32.IsUserAnAdmin())
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+            kernel32.GetCurrentProcess.argtypes = []
+            kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+            kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+            kernel32.CloseHandle.restype = wintypes.BOOL
+            advapi32.OpenProcessToken.argtypes = [wintypes.HANDLE, wintypes.DWORD, ctypes.POINTER(wintypes.HANDLE)]
+            advapi32.OpenProcessToken.restype = wintypes.BOOL
+            advapi32.GetTokenInformation.argtypes = [
+                wintypes.HANDLE,
+                ctypes.c_int,
+                wintypes.LPVOID,
+                wintypes.DWORD,
+                ctypes.POINTER(wintypes.DWORD),
+            ]
+            advapi32.GetTokenInformation.restype = wintypes.BOOL
+            token = wintypes.HANDLE()
+            if not advapi32.OpenProcessToken(kernel32.GetCurrentProcess(), TOKEN_QUERY, ctypes.byref(token)):
+                raise _win_error("OpenProcessToken(elevation)")
+            try:
+                elevated = wintypes.DWORD()
+                size = wintypes.DWORD()
+                if not advapi32.GetTokenInformation(
+                    token, 20, ctypes.byref(elevated), ctypes.sizeof(elevated), ctypes.byref(size)
+                ):  # TokenElevation
+                    raise _win_error("GetTokenInformation(TokenElevation)")
+                return bool(elevated.value)
+            finally:
+                kernel32.CloseHandle(token)
         except (AttributeError, OSError):
+            logger.warning("watchdog_elevation_query_failed", exc_info=True)
             return False
-
-    @staticmethod
-    def _sc_executable() -> str | None:
-        windows_dir = os.environ.get("WINDIR")
-        candidates = []
-        if windows_dir:
-            candidates.append(Path(windows_dir) / "System32" / "sc.exe")
-        candidates.append(Path("sc.exe"))
-        for candidate in candidates:
-            if candidate.is_file() or not candidate.is_absolute():
-                return str(candidate)
-        return None
-
-    @staticmethod
-    def _run_sc(sc: str, *arguments: str) -> subprocess.CompletedProcess:
-        creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-        return subprocess.run(
-            [sc, *arguments],
-            capture_output=True,
-            text=True,
-            encoding=_system_command_encoding(),
-            errors="replace",
-            check=False,
-            creationflags=creation_flags,
-        )
 
     @classmethod
     def _remove_legacy_task(cls) -> tuple[bool, str]:
@@ -349,11 +551,12 @@ class WindowsWatchdogManager:
                 errors="replace",
                 check=False,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                timeout=10,
             )
             if result.returncode == 0 or cls._legacy_task_not_found(result):
                 return True, ""
             return False, cls._format_command_error(result)
-        except OSError:
+        except (OSError, subprocess.TimeoutExpired):
             logger.warning("legacy_task_remove_failed", exc_info=True)
             return False, "Unable to remove the legacy BlinkCall scheduled task."
 
@@ -367,25 +570,85 @@ class WindowsWatchdogManager:
         output = (result.stderr or result.stdout or "").strip()
         return output or f"Windows service command failed with exit code {result.returncode}."
 
-    @staticmethod
-    def _service_already_running(result: subprocess.CompletedProcess) -> bool:
-        output = f"{result.stdout}\n{result.stderr}".lower()
-        return "1056" in output or "already been started" in output or "already running" in output
 
-    @staticmethod
-    def _service_not_running_or_missing(result: subprocess.CompletedProcess) -> bool:
-        output = f"{result.stdout}\n{result.stderr}".lower()
-        return any(
-            marker in output
-            for marker in (
-                "1060",
-                "1062",
-                "does not exist",
-                "has not been started",
-                "不存在",
-                "未启动",
-            )
-        )
+class _ServiceControlApi:
+    """SCM bindings; service errors are numeric and independent of locale."""
+
+    def __init__(self):
+        self.advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+        signatures = {
+            "OpenSCManagerW": ([wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.DWORD], wintypes.HANDLE),
+            "OpenServiceW": ([wintypes.HANDLE, wintypes.LPCWSTR, wintypes.DWORD], wintypes.HANDLE),
+            "CreateServiceW": (
+                [
+                    wintypes.HANDLE,
+                    wintypes.LPCWSTR,
+                    wintypes.LPCWSTR,
+                    wintypes.DWORD,
+                    wintypes.DWORD,
+                    wintypes.DWORD,
+                    wintypes.DWORD,
+                    wintypes.LPCWSTR,
+                    wintypes.LPCWSTR,
+                    ctypes.POINTER(wintypes.DWORD),
+                    wintypes.LPCWSTR,
+                    wintypes.LPCWSTR,
+                    wintypes.LPCWSTR,
+                ],
+                wintypes.HANDLE,
+            ),
+            "ChangeServiceConfigW": (
+                [
+                    wintypes.HANDLE,
+                    wintypes.DWORD,
+                    wintypes.DWORD,
+                    wintypes.DWORD,
+                    wintypes.LPCWSTR,
+                    wintypes.LPCWSTR,
+                    ctypes.POINTER(wintypes.DWORD),
+                    wintypes.LPCWSTR,
+                    wintypes.LPCWSTR,
+                    wintypes.LPCWSTR,
+                    wintypes.LPCWSTR,
+                ],
+                wintypes.BOOL,
+            ),
+            "ChangeServiceConfig2W": ([wintypes.HANDLE, wintypes.DWORD, wintypes.LPVOID], wintypes.BOOL),
+            "StartServiceW": ([wintypes.HANDLE, wintypes.DWORD, ctypes.POINTER(wintypes.LPCWSTR)], wintypes.BOOL),
+            "ControlService": ([wintypes.HANDLE, wintypes.DWORD, ctypes.POINTER(SERVICE_STATUS)], wintypes.BOOL),
+            "QueryServiceStatus": ([wintypes.HANDLE, ctypes.POINTER(SERVICE_STATUS)], wintypes.BOOL),
+            "DeleteService": ([wintypes.HANDLE], wintypes.BOOL),
+            "CloseServiceHandle": ([wintypes.HANDLE], wintypes.BOOL),
+        }
+        for name, (arguments, result) in signatures.items():
+            function = getattr(self.advapi32, name)
+            function.argtypes = arguments
+            function.restype = result
+
+    @contextmanager
+    def manager(self, create=False):
+        access = SC_MANAGER_CONNECT | (SC_MANAGER_CREATE_SERVICE if create else 0)
+        handle = self.advapi32.OpenSCManagerW(None, None, access)
+        if not handle:
+            raise _win_error("OpenSCManagerW")
+        try:
+            yield handle
+        finally:
+            self.advapi32.CloseServiceHandle(handle)
+
+    def open_service(self, manager, name, access):
+        service = self.advapi32.OpenServiceW(manager, name, access)
+        if not service:
+            if ctypes.get_last_error() == ERROR_SERVICE_DOES_NOT_EXIST:
+                return None
+            raise _win_error("OpenServiceW")
+        return service
+
+    def query_status(self, service) -> SERVICE_STATUS:
+        status = SERVICE_STATUS()
+        if not self.advapi32.QueryServiceStatus(service, ctypes.byref(status)):
+            raise _win_error("QueryServiceStatus")
+        return status
 
 
 class WindowsWatchdogService:
@@ -839,8 +1102,7 @@ def _configure_service_logging() -> logging.Logger:
     if service_logger.handlers:
         return service_logger
 
-    program_data = Path(os.environ.get("PROGRAMDATA", r"C:\\ProgramData"))
-    log_path = program_data / "BlinkCall" / "logs" / "watchdog.log"
+    log_path = _service_log_path()
     try:
         log_path.parent.mkdir(parents=True, exist_ok=True)
         handler = RotatingFileHandler(log_path, maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8")
@@ -854,6 +1116,29 @@ def _configure_service_logging() -> logging.Logger:
     except OSError:
         service_logger.addHandler(logging.NullHandler())
     return service_logger
+
+
+def _service_log_path() -> Path:
+    return Path(os.environ.get("PROGRAMDATA", r"C:\ProgramData")) / "BlinkCall" / "logs" / "watchdog.log"
+
+
+@contextmanager
+def _shell_com_apartment():
+    # Service configuration runs in a Python worker thread, where Qt has not
+    # initialized COM. ShellExecuteEx may invoke COM-based shell extensions.
+    ole32 = ctypes.WinDLL("ole32", use_last_error=True)
+    ole32.CoInitializeEx.argtypes = [wintypes.LPVOID, wintypes.DWORD]
+    ole32.CoInitializeEx.restype = wintypes.LONG
+    ole32.CoUninitialize.argtypes = []
+    ole32.CoUninitialize.restype = None
+    result = ole32.CoInitializeEx(None, 0x2 | 0x4)  # STA | DISABLE_OLE1DDE
+    if result < 0 and result != -2147417850:  # RPC_E_CHANGED_MODE: COM already initialized
+        raise OSError(f"CoInitializeEx failed (HRESULT=0x{result & 0xFFFFFFFF:08X}).")
+    try:
+        yield
+    finally:
+        if result >= 0:
+            ole32.CoUninitialize()
 
 
 def _system_command_encoding() -> str:
@@ -870,4 +1155,28 @@ def _win_error(operation: str) -> OSError:
 
 def run_watchdog_service() -> int:
     """Run the SCM service entrypoint from ``BlinkCall.exe --watchdog-service``."""
-    return WindowsWatchdogService().run()
+    try:
+        return WindowsWatchdogService().run()
+    except Exception:
+        _configure_service_logging().exception("watchdog_service_entrypoint_failed")
+        return 1
+
+
+def run_watchdog_configuration(arguments: list[str]) -> int:
+    """Configure the service in a UAC helper without starting Qt or the GUI."""
+    if sys.platform != "win32" or len(arguments) != 2 or arguments[0] not in ("enable", "disable"):
+        return 2
+    service_logger = _configure_service_logging()
+    try:
+        ok, error = WindowsWatchdogManager._set_enabled_elevated(arguments[0] == "enable")
+    except Exception as exc:
+        service_logger.exception("watchdog_configuration_helper_failed")
+        ok, error = False, str(exc)
+    if not ok:
+        service_logger.error("watchdog_configuration_rejected detail=%s", error)
+    try:
+        Path(arguments[1]).write_text(json.dumps({"ok": ok, "error": error}), encoding="utf-8")
+    except OSError:
+        service_logger.exception("watchdog_configuration_result_write_failed")
+        return 1
+    return 0 if ok else 1

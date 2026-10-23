@@ -69,7 +69,17 @@ class ConfigManager:
                 # explicit save persists version 2 and the user's choice.
                 startup["enabled"] = False
                 startup["default_policy_version"] = STARTUP_DEFAULT_POLICY_VERSION
-            return Helper.deep_merge_dict(default_config, local_config)
+            merged = Helper.deep_merge_dict(default_config, local_config)
+            # Lists replace the defaults during merging. Configurations saved
+            # before stage prompts were introduced therefore have no per-step
+            # switch at all. Apply the same defaults as a fresh installation,
+            # while preserving each explicitly enabled or disabled prompt.
+            pattern = (merged.get("blink_call") or {}).get("pattern")
+            if isinstance(pattern, list):
+                for index, rule in enumerate(pattern):
+                    if isinstance(rule, dict):
+                        rule.setdefault("sound_prompt", index > 0)
+            return merged
 
         cls.save_local_config(default_config)
         return default_config

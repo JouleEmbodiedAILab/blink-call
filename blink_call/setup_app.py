@@ -2,14 +2,20 @@ import sys
 from pathlib import Path
 
 from blink_call.core.windows_watchdog import (
+    WATCHDOG_CONFIGURE_ARGUMENT,
     WATCHDOG_SERVICE_ARGUMENT,
-    WATCHDOG_SUPERVISED_ARGUMENT,
     WATCHDOG_USER_EXIT_CODE,
+    run_watchdog_configuration,
     run_watchdog_service,
 )
 
-if __name__ == "__main__" and WATCHDOG_SERVICE_ARGUMENT in sys.argv:
-    sys.exit(run_watchdog_service())
+if __name__ == "__main__":
+    # These processes must bypass both Qt initialization and the GUI mutex.
+    # In particular, the UAC helper must not activate a non-elevated instance.
+    if sys.argv[1:2] == [WATCHDOG_SERVICE_ARGUMENT]:
+        sys.exit(run_watchdog_service())
+    if sys.argv[1:2] == [WATCHDOG_CONFIGURE_ARGUMENT]:
+        sys.exit(run_watchdog_configuration(sys.argv[2:]))
 
 from PySide6.QtCore import QStandardPaths
 from PySide6.QtGui import QIcon
@@ -99,6 +105,7 @@ if __name__ == "__main__":
     finally:
         if single_instance is not None:
             single_instance.close()
-    if WATCHDOG_SUPERVISED_ARGUMENT in app.arguments() and window.user_requested_exit:
+    # The service also adopts GUI processes started manually before enablement.
+    if sys.platform == "win32" and window.user_requested_exit:
         exit_code = WATCHDOG_USER_EXIT_CODE
     sys.exit(exit_code)
