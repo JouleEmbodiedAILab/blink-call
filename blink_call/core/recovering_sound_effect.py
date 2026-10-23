@@ -1,4 +1,6 @@
 import logging
+import math
+import time
 import wave
 from pathlib import Path
 
@@ -27,6 +29,7 @@ class RecoveringSoundEffect(QObject):
         _scheduler=None,
         _media_devices=None,
         _default_audio_output=None,
+        _clock=None,
         *,
         loop_count=1,
         component="stage_prompt",
@@ -42,6 +45,7 @@ class RecoveringSoundEffect(QObject):
         self._component = component
         self._effect_factory = _effect_factory or QSoundEffect
         self._scheduler = _scheduler or QTimer.singleShot
+        self._clock = _clock or time.monotonic
         self._default_audio_output = _default_audio_output or QMediaDevices.defaultAudioOutput
 
         self._effect = None
@@ -54,6 +58,8 @@ class RecoveringSoundEffect(QObject):
         self._retry_scheduled = False
         self._loading_wait_key = None
         self._play_requested = False
+        self._source_duration_ms = None
+        self._playback_deadline = None
 
         self._monitor_timer = QTimer(self)
         self._monitor_timer.setInterval(2000)
@@ -83,6 +89,11 @@ class RecoveringSoundEffect(QObject):
         self._emit_diagnostic(f"volume_updated; volume={self._volume:.2f}")
 
     def play(self):
+        # A queued play request may run before an overdue timer after the UI
+        # thread was busy. Retire a stalled sink before reusing it in that case.
+        if self._playback_deadline is not None and self._clock() >= self._playback_deadline:
+            self._verify_finished(self._effect, self._generation, self._request_id)
+
         if self._pending_play:
             self._emit_diagnostic(f"play_coalesced; request={self._request_id}")
             return
@@ -98,6 +109,7 @@ class RecoveringSoundEffect(QObject):
         self._retry_scheduled = False
         self._loading_wait_key = None
         self._play_requested = True
+        self._playback_deadline = None
         self._emit_diagnostic(f"play_requested; request={request_id}")
 
         if not self.source_path.is_file():
@@ -116,6 +128,7 @@ class RecoveringSoundEffect(QObject):
         self._emit_diagnostic(f"play_stopped; request={self._request_id}")
         self._request_id += 1
         self._play_requested = False
+        self._playback_deadline = None
         self._monitor_timer.stop()
         self._pending_play = False
         self._awaiting_start = False
@@ -126,6 +139,7 @@ class RecoveringSoundEffect(QObject):
 
     def _create_effect(self, reason: str):
         previous_effect = self._effect
+        self._playback_deadline = None
         # Invalidate callbacks before stop(), which may emit playingChanged
         # synchronously from the old backend.
         self._generation += 1
@@ -223,8 +237,48 @@ class RecoveringSoundEffect(QObject):
         self._awaiting_start = False
         self._retry_scheduled = False
         self._loading_wait_key = None
+        if not self._continuous and self._source_duration_ms is not None:
+            # QSoundEffect can report Ready/playing=True while its sink is
+            # stalled. isPlaying() only acknowledges the play command; require
+            # a finite sound to finish within its WAV duration plus drain time.
+            timeout_ms = self._source_duration_ms * max(1, self._loop_count) + 500
+            self._playback_deadline = self._clock() + timeout_ms / 1000.0
+            effect, generation = self._effect, self._generation
+            self._scheduler(timeout_ms, lambda: self._verify_finished(effect, generation, request_id))
         audio_logger.info("%s_started request=%s generation=%s", self._component, request_id, self._generation)
         self._emit_diagnostic(f"play_started; request={request_id}; generation={self._generation}")
+
+    def _verify_finished(self, effect, generation: int, request_id: int):
+        if (
+            effect is not self._effect
+            or generation != self._generation
+            or request_id != self._request_id
+            or self._continuous
+            or self._pending_play
+            or not self._play_requested
+        ):
+            return
+
+        if not effect.isPlaying():
+            self._mark_finished()
+            return
+
+        self.log_state("playback_timeout")
+        audio_logger.warning(
+            "%s_playback_timeout request=%s generation=%s duration_ms=%s source=%s",
+            self._component, request_id, generation, self._source_duration_ms, self.source_path,
+        )
+        self._emit_diagnostic(f"playback_timeout; request={request_id}; generation={generation}")
+        self._play_requested = False
+        # The step has already passed: do not replay an outdated cue. Discard
+        # the stuck sink and preload a fresh one for the next step/preview.
+        self._create_effect("playback_timeout")
+
+    def _mark_finished(self):
+        self._play_requested = False
+        self._playback_deadline = None
+        audio_logger.info("%s_finished request=%s generation=%s", self._component, self._request_id, self._generation)
+        self._emit_diagnostic(f"play_finished; request={self._request_id}; generation={self._generation}")
 
     def _wait_for_loading(self, effect, generation: int, request_id: int):
         wait_key = (generation, request_id)
@@ -313,11 +367,14 @@ class RecoveringSoundEffect(QObject):
         self.log_state("playing_changed")
         if effect.isPlaying() and self._pending_play:
             self._mark_started(self._request_id)
+        elif not effect.isPlaying() and not self._pending_play and not self._continuous and self._play_requested:
+            self._mark_finished()
 
     def _on_audio_outputs_changed(self):
         resume_play = self._pending_play or (self._continuous and self._play_requested)
         request_id = self._request_id
         self._pending_play = resume_play
+        self._play_requested = resume_play
         self._retry_attempt = 0
         self._retry_scheduled = False
         self._loading_wait_key = None
@@ -350,18 +407,25 @@ class RecoveringSoundEffect(QObject):
             status=self._status_name(effect.status()),
             loaded=effect.isLoaded(),
             playing=effect.isPlaying(),
+            duration_ms=self._source_duration_ms,
+            loops=self._loop_count,
             source=self.source_path,
             requested=self._play_requested,
             volume=f"{self._volume:.2f}",
         )
 
     def _log_source_format(self):
+        self._source_duration_ms = None
         try:
             with wave.open(str(self.source_path), "rb") as source:
+                if source.getframerate() > 0:
+                    self._source_duration_ms = math.ceil(source.getnframes() * 1000 / source.getframerate())
                 audio_logger.info(
-                    "%s_source_format channels=%s sample_rate=%s sample_bytes=%s frames=%s compression=%s",
+                    "%s_source_format channels=%s sample_rate=%s sample_bytes=%s frames=%s "
+                    "compression=%s duration_ms=%s",
                     self._component, source.getnchannels(), source.getframerate(),
                     source.getsampwidth(), source.getnframes(), source.getcomptype(),
+                    self._source_duration_ms,
                 )
         except (OSError, EOFError, wave.Error) as exc:
             audio_logger.warning("%s_source_unreadable source=%s detail=%s", self._component, self.source_path, exc)
