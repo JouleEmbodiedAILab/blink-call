@@ -1,16 +1,22 @@
 import logging
+import sys
 import time
 from datetime import datetime
 from pathlib import Path
 
 import cv2
-from PySide6.QtCore import QObject, QTimer, Signal
+from PySide6.QtCore import QObject, Qt, QTimer, Signal, Slot
 from PySide6.QtGui import QImage
 from PySide6.QtMultimedia import QMediaDevices, QSoundEffect
 
-from blink_call.core.audio_status_logging import configure_audio_status_logging, log_audio_status
+from blink_call.core.audio_status_logging import (
+    audio_thread_context,
+    configure_audio_status_logging,
+    log_audio_status,
+)
 from blink_call.core.inference_worker import InferenceWorker
 from blink_call.core.model_files_manager import ModelFilesManager
+from blink_call.core.process_sound_effect import ProcessSoundEffect
 from blink_call.core.recovering_sound_effect import RecoveringSoundEffect
 from blink_call.core.resource_path import get_resource_path
 from blink_call.modules.home.home_model import HomeModel
@@ -18,7 +24,6 @@ from blink_call.modules.i18n import get_i18n
 from blink_call.modules.setting.setting_model import SettingModel
 from blink_call.modules.setting.setting_viewmodel import SettingViewModel
 from blink_call.utils.debug_overlay import draw_debug
-
 
 audio_logger = logging.getLogger("blink_call.audio")
 
@@ -52,9 +57,10 @@ class HomeViewModel(QObject):
         self._initialize_vars()
 
         self.infer_worker = InferenceWorker(self.model)
-        self.infer_worker.result_ready.connect(self.on_infer_result)
-        self.infer_worker.show_debug_msg.connect(self.on_infer_debug)
-        self.infer_worker.eye_region_status.connect(self.on_eye_region_status)
+        # These callbacks update both widgets and main-thread audio objects.
+        self.infer_worker.result_ready.connect(self.on_infer_result, Qt.ConnectionType.QueuedConnection)
+        self.infer_worker.show_debug_msg.connect(self.on_infer_debug, Qt.ConnectionType.QueuedConnection)
+        self.infer_worker.eye_region_status.connect(self.on_eye_region_status, Qt.ConnectionType.QueuedConnection)
 
         self.timer = QTimer(self)
         self.timer.setInterval(20)
@@ -73,7 +79,8 @@ class HomeViewModel(QObject):
         self.call_sound_player.diagnostic.connect(self.show_debug_msg.emit)
         self.audio_media_devices = QMediaDevices(self)
         self.audio_media_devices.audioOutputsChanged.connect(self._on_audio_outputs_changed)
-        self.stage_prompt_sound_player = RecoveringSoundEffect(
+        stage_prompt_player_type = ProcessSoundEffect if sys.platform == "win32" else RecoveringSoundEffect
+        self.stage_prompt_sound_player = stage_prompt_player_type(
             get_resource_path("assets", "audio", "prompt.wav"),
             self,
         )
@@ -94,9 +101,7 @@ class HomeViewModel(QObject):
         )
         pattern = self.setting_vm.get_config("blink_call.pattern")
         prompt_steps = [
-            index + 1
-            for index, rule in enumerate(pattern)
-            if isinstance(rule, dict) and bool(rule.get("sound_prompt"))
+            index + 1 for index, rule in enumerate(pattern) if isinstance(rule, dict) and bool(rule.get("sound_prompt"))
         ]
         audio_logger.info("stage_prompt_configuration enabled_steps=%s total_steps=%s", prompt_steps, len(pattern))
         self.latest_infer_result = None
@@ -258,8 +263,26 @@ class HomeViewModel(QObject):
         else:
             self.emit_show_camera_status("service_started_failed")
 
+    @Slot(dict)
     def on_infer_result(self, result):
         self.latest_infer_result = result
+        if (
+            result.get("blink_completed_step") is not None
+            or result.get("stage_sound_prompt_flag")
+            or result.get("blinck_call_flag")
+        ):
+            emitted_at = result.get("result_emitted_monotonic_s")
+            queue_delay_ms = None if emitted_at is None else round((time.monotonic() - emitted_at) * 1000, 3)
+            log_audio_status(
+                "stage_prompt",
+                "stage_result_received",
+                step=result.get("blink_completed_step"),
+                timestamp_ms=result.get("timestamp_ms"),
+                queue_delay_ms=queue_delay_ms,
+                sound_prompt=bool(result.get("stage_sound_prompt_flag")),
+                call=bool(result.get("blinck_call_flag")),
+                **audio_thread_context(self),
+            )
 
         self.blink_progress_updated.emit(
             {
@@ -270,14 +293,18 @@ class HomeViewModel(QObject):
             }
         )
         if bool(result.get("blinck_call_flag")):
+            if bool(result.get("stage_sound_prompt_flag")):
+                log_audio_status("stage_prompt", "play_skipped", reason="final_call_priority")
             self.start_or_reset_call_audio()
         elif bool(result.get("stage_sound_prompt_flag")):
             self.play_stage_prompt_sound()
 
+    @Slot(str)
     def on_infer_debug(self, text: str):
         if self.debug_mode:
             self.show_debug_msg.emit(text)
 
+    @Slot(str)
     def on_eye_region_status(self, status):
         if status == "no_face" and self.camera_frame_available:
             if self.face_missing_since_s is None:
@@ -618,3 +645,5 @@ class HomeViewModel(QObject):
         self.stage_prompt_sound_player.stop()
         self.close_recording_writer()
         self.model.stop_active_sources()
+        if isinstance(self.stage_prompt_sound_player, ProcessSoundEffect):
+            self.stage_prompt_sound_player.shutdown()

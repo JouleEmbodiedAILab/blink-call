@@ -32,7 +32,8 @@ def configure_app_logging(log_dir, max_bytes=5 * 1024 * 1024, backup_count=3):
     handler._blink_call_log_path = resolved_path
     handler.setFormatter(
         logging.Formatter(
-            "%(asctime)s %(levelname)s %(name)s [%(threadName)s] %(message)s",
+            "%(asctime)s.%(msecs)03d %(levelname)s %(name)s "
+            "[pid=%(process)d thread=%(threadName)s tid=%(thread)d] %(message)s",
             datefmt="%Y-%m-%d %H:%M:%S",
         )
     )

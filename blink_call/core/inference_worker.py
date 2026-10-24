@@ -7,6 +7,7 @@ from pathlib import Path
 from PySide6.QtCore import QThread, Signal
 
 from blink_call.algorithm import EyeRegionDetector, EyeStateClassifier
+from blink_call.core.audio_status_logging import log_audio_status
 from blink_call.utils.helper import Helper
 
 
@@ -17,6 +18,7 @@ class InferenceWorker(QThread):
 
     def __init__(self, home_model):
         super().__init__()
+        self.setObjectName("blink-inference")
         self.home_model = home_model
 
     def initialize_vars(self, config):
@@ -55,6 +57,7 @@ class InferenceWorker(QThread):
 
         self.match_cooldown_s = 1.0
         self.last_match_time = -1.0
+        self.completed_stage_step = None
 
         self.progress_step_idx = 0
         self.progress_in_step_s = 0.0
@@ -147,6 +150,7 @@ class InferenceWorker(QThread):
         self.running = False
 
     def run(self):
+        log_audio_status("inference", "worker_started")
         try:
             while self.running:
                 now = time.perf_counter()
@@ -171,10 +175,25 @@ class InferenceWorker(QThread):
                 )
                 if not self.running:
                     break
+                if result.get("blink_completed_step") is not None:
+                    log_audio_status(
+                        "inference",
+                        "stage_result_emitted",
+                        step=result["blink_completed_step"],
+                        timestamp_ms=result["timestamp_ms"],
+                        sound_prompt=result["stage_sound_prompt_flag"],
+                        call=result["blinck_call_flag"],
+                    )
+                result["result_emitted_monotonic_s"] = time.monotonic()
                 self.result_ready.emit(result)
                 self.stat_fps()
+        except Exception:
+            logging.getLogger("blink_call.inference").exception("inference_worker_failed")
+            log_audio_status("inference", "worker_failed")
+            raise
         finally:
             self._shutdown_eye_region_executor()
+            log_audio_status("inference", "worker_stopped")
 
     def inference(self, frame, source_timestamp_ms=None, sample_timestamp_s=None):
         """Classify at 10 Hz while eye-region detection runs asynchronously.
@@ -230,9 +249,7 @@ class InferenceWorker(QThread):
         inference_elapsed_ms = (time.perf_counter() - inference_started) * 1000.0
         inference_finished_timestamp_ms = int(time.time() * 1000)
         confidence_text = "None" if confidence is None else f"{float(confidence):.3f}"
-        model_confidence_text = (
-            "None" if model_confidence is None else f"{float(model_confidence):.3f}"
-        )
+        model_confidence_text = "None" if model_confidence is None else f"{float(model_confidence):.3f}"
         detection_elapsed_ms = self.latest_detection_elapsed_ms
         detection_elapsed_text = "None" if detection_elapsed_ms is None else f"{detection_elapsed_ms:.1f}"
         eye_region_age_ms = None
@@ -257,6 +274,7 @@ class InferenceWorker(QThread):
             "debug_eye_region_detection_pending": self.pending_eye_region_future is not None,
             "blinck_call_flag": bool(blinck_call_flag),
             "stage_sound_prompt_flag": bool(stage_sound_prompt_flag),
+            "blink_completed_step": self.completed_stage_step,
             "blink_progress_ratio": float(progress_ratio),
             "debug_classifier_state": eye_state,
             "debug_classifier_model_label": model_label,
@@ -526,6 +544,7 @@ class InferenceWorker(QThread):
     def update_forward_progress(self, eye_state, sample_timestamp_s=None):
         now = time.perf_counter() if sample_timestamp_s is None else float(sample_timestamp_s)
         stage_sound_prompt_flag = False
+        self.completed_stage_step = None
 
         if not self.blink_pattern:
             self.reset_progress_state()
@@ -564,6 +583,7 @@ class InferenceWorker(QThread):
                     return self.current_progress_ratio(self.blink_pattern), False, False
 
                 completed_rule = self.blink_pattern[self.progress_step_idx]
+                self.completed_stage_step = self.progress_step_idx + 1
                 stage_sound_prompt_flag = bool(completed_rule.get("sound_prompt"))
                 logging.getLogger("blink_call.audio").info(
                     "blink_stage_completed step=%s total_steps=%s state=%s sound_prompt=%s",

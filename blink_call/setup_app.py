@@ -1,6 +1,12 @@
 import sys
 from pathlib import Path
 
+if __name__ == "__main__" and sys.argv[1:2] == ["--play-stage-prompt"]:
+    # A prompt worker must never initialize Qt, models, or the GUI mutex.
+    from blink_call.core.stage_prompt_worker import run_stage_prompt
+
+    sys.exit(run_stage_prompt(sys.argv[2:]))
+
 from blink_call.core.windows_watchdog import (
     WATCHDOG_CONFIGURE_ARGUMENT,
     WATCHDOG_SERVICE_ARGUMENT,
@@ -25,10 +31,10 @@ from blink_call.core.config_manager import ConfigManager
 from blink_call.core.dependency_injection import DI
 from blink_call.core.logging_setup import configure_app_logging
 from blink_call.core.navigation import Navigation
+from blink_call.core.resource_path import get_resource_path
 from blink_call.core.theme_manager import ThemeManager
 from blink_call.main_window import MainWindow
 from blink_call.modules import MODULES_REGISTRY
-from blink_call.core.resource_path import get_resource_path
 
 
 def create_page(name, main_window, nav):

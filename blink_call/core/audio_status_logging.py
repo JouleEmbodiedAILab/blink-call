@@ -6,9 +6,13 @@ changes and QSoundEffect state is useful when investigating a missing alert.
 """
 
 import logging
+import platform
+import threading
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
+import PySide6
+from PySide6.QtCore import QThread, qVersion
 
 AUDIO_STATUS_LOGGER_NAME = "blink_call.audio_status"
 AUDIO_STATUS_LOG_FILENAME = "audio_status.log"
@@ -55,29 +59,44 @@ def configure_audio_status_logging(
     setattr(handler, _HANDLER_PATH_ATTR, resolved_path)
     handler.setFormatter(
         logging.Formatter(
-            "%(asctime)s %(levelname)s %(message)s",
+            "%(asctime)s.%(msecs)03d %(levelname)s [pid=%(process)d thread=%(threadName)s] %(message)s",
             datefmt="%Y-%m-%d %H:%M:%S",
         )
     )
     logger.addHandler(handler)
     logger.info("event=logging_started path=%s", log_path)
+    log_audio_status(
+        "runtime",
+        "initialized",
+        system=platform.platform(),
+        python=platform.python_version(),
+        pyside=PySide6.__version__,
+        qt=qVersion(),
+    )
     return log_path
 
 
 def log_audio_status(component: str, event: str, **details):
     """Record one concise audio diagnostic event when the logger is enabled."""
-    if not details:
-        logging.getLogger(AUDIO_STATUS_LOGGER_NAME).info(
-            "component=%s event=%s", component, event
-        )
+    logger = logging.getLogger(AUDIO_STATUS_LOGGER_NAME)
+    if not logger.handlers or not logger.isEnabledFor(logging.INFO):
         return
 
-    detail_text = " ".join(
-        f"{key}={_clean_value(value)}" for key, value in sorted(details.items())
-    )
-    logging.getLogger(AUDIO_STATUS_LOGGER_NAME).info(
-        "component=%s event=%s %s", component, event, detail_text
-    )
+    # Use the OS thread ID explicitly so Process Explorer / Process.Threads
+    # snapshots can be correlated without relying on Python's thread cookie.
+    details["native_tid"] = threading.get_native_id()
+    details["qt_thread"] = QThread.currentThread().objectName() or "unnamed"
+    detail_text = " ".join(f"{key}={_clean_value(value)}" for key, value in sorted(details.items()))
+    logger.info("component=%s event=%s %s", component, event, detail_text)
+
+
+def audio_thread_context(owner):
+    """Describe affinity without moving or accessing an audio backend."""
+    owner_thread = owner.thread()
+    return {
+        "owner_thread": owner_thread.objectName() or "unnamed",
+        "owner_thread_matches": QThread.currentThread() == owner_thread,
+    }
 
 
 def _remove_managed_handlers(logger):

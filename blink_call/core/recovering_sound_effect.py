@@ -7,8 +7,7 @@ from pathlib import Path
 from PySide6.QtCore import QObject, QTimer, QUrl, Signal
 from PySide6.QtMultimedia import QMediaDevices, QSoundEffect
 
-from blink_call.core.audio_status_logging import log_audio_status
-
+from blink_call.core.audio_status_logging import audio_thread_context, log_audio_status
 
 audio_logger = logging.getLogger("blink_call.audio")
 
@@ -174,8 +173,12 @@ class RecoveringSoundEffect(QObject):
         # not have been enabled when an initial load failure occurred.
         audio_logger.info(
             "%s_backend_created reason=%s generation=%s source=%s exists=%s device=%s",
-            self._component, reason, generation, self.source_path,
-            self.source_path.is_file(), self._device_description(device),
+            self._component,
+            reason,
+            generation,
+            self.source_path,
+            self.source_path.is_file(),
+            self._device_description(device),
         )
         if reason in ("initial", "source_changed"):
             self._log_source_format()
@@ -266,7 +269,11 @@ class RecoveringSoundEffect(QObject):
         self.log_state("playback_timeout")
         audio_logger.warning(
             "%s_playback_timeout request=%s generation=%s duration_ms=%s source=%s",
-            self._component, request_id, generation, self._source_duration_ms, self.source_path,
+            self._component,
+            request_id,
+            generation,
+            self._source_duration_ms,
+            self.source_path,
         )
         self._emit_diagnostic(f"playback_timeout; request={request_id}; generation={generation}")
         self._play_requested = False
@@ -334,11 +341,7 @@ class RecoveringSoundEffect(QObject):
         self._scheduler(delay_ms, lambda: self._run_retry(request_id, attempt, generation))
 
     def _run_retry(self, request_id: int, attempt: int, scheduled_generation: int):
-        if (
-            request_id != self._request_id
-            or not self._pending_play
-            or scheduled_generation != self._generation
-        ):
+        if request_id != self._request_id or not self._pending_play or scheduled_generation != self._generation:
             return
         self._retry_scheduled = False
         self._loading_wait_key = None
@@ -355,7 +358,9 @@ class RecoveringSoundEffect(QObject):
         if effect.status() == QSoundEffect.Status.Error:
             audio_logger.warning(
                 "%s_backend_error generation=%s source=%s device=%s",
-                self._component, generation, self.source_path,
+                self._component,
+                generation,
+                self.source_path,
                 self._device_description(self._get_default_audio_output()),
             )
         if self._pending_play:
@@ -398,8 +403,14 @@ class RecoveringSoundEffect(QObject):
         effect = self._effect
         audio_logger.info(
             "%s_state event=%s status=%s loaded=%s playing=%s requested=%s volume=%.2f source=%s",
-            self._component, event, self._status_name(effect.status()),
-            effect.isLoaded(), effect.isPlaying(), self._play_requested, self._volume, self.source_path,
+            self._component,
+            event,
+            self._status_name(effect.status()),
+            effect.isLoaded(),
+            effect.isPlaying(),
+            self._play_requested,
+            self._volume,
+            self.source_path,
         )
         log_audio_status(
             self._component,
@@ -412,6 +423,11 @@ class RecoveringSoundEffect(QObject):
             source=self.source_path,
             requested=self._play_requested,
             volume=f"{self._volume:.2f}",
+            request=self._request_id,
+            generation=self._generation,
+            loops_remaining=effect.loopsRemaining(),
+            effect_thread_matches=effect.thread() == self.thread() if isinstance(effect, QObject) else "unavailable",
+            **audio_thread_context(self),
         )
 
     def _log_source_format(self):
@@ -423,8 +439,12 @@ class RecoveringSoundEffect(QObject):
                 audio_logger.info(
                     "%s_source_format channels=%s sample_rate=%s sample_bytes=%s frames=%s "
                     "compression=%s duration_ms=%s",
-                    self._component, source.getnchannels(), source.getframerate(),
-                    source.getsampwidth(), source.getnframes(), source.getcomptype(),
+                    self._component,
+                    source.getnchannels(),
+                    source.getframerate(),
+                    source.getsampwidth(),
+                    source.getnframes(),
+                    source.getcomptype(),
                     self._source_duration_ms,
                 )
         except (OSError, EOFError, wave.Error) as exc:
@@ -466,5 +486,5 @@ class RecoveringSoundEffect(QObject):
         return getattr(status, "name", str(status))
 
     def _emit_diagnostic(self, text: str):
-        log_audio_status(self._component, "state", message=text)
+        log_audio_status(self._component, "state", message=text, **audio_thread_context(self))
         self.diagnostic.emit(f"[{self._component}] {text}")
