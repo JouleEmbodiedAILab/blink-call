@@ -7,7 +7,7 @@ from pathlib import Path
 from PySide6.QtCore import QObject, QTimer, QUrl, Signal
 from PySide6.QtMultimedia import QMediaDevices, QSoundEffect
 
-from blink_call.core.audio_status_logging import audio_thread_context, log_audio_status
+from blink_call.core.audio_status_logging import log_audio_status
 
 audio_logger = logging.getLogger("blink_call.audio")
 
@@ -423,11 +423,6 @@ class RecoveringSoundEffect(QObject):
             source=self.source_path,
             requested=self._play_requested,
             volume=f"{self._volume:.2f}",
-            request=self._request_id,
-            generation=self._generation,
-            loops_remaining=effect.loopsRemaining(),
-            effect_thread_matches=effect.thread() == self.thread() if isinstance(effect, QObject) else "unavailable",
-            **audio_thread_context(self),
         )
 
     def _log_source_format(self):
@@ -486,5 +481,5 @@ class RecoveringSoundEffect(QObject):
         return getattr(status, "name", str(status))
 
     def _emit_diagnostic(self, text: str):
-        log_audio_status(self._component, "state", message=text, **audio_thread_context(self))
+        log_audio_status(self._component, "state", message=text)
         self.diagnostic.emit(f"[{self._component}] {text}")

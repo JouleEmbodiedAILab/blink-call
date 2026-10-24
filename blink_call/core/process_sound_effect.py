@@ -9,7 +9,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QObject, QProcess, QTimer, Signal, Slot
 
-from blink_call.core.audio_status_logging import audio_thread_context, log_audio_status
+from blink_call.core.audio_status_logging import log_audio_status
 from blink_call.core.resource_path import PROJECT_ROOT
 from blink_call.core.stage_prompt_worker import (
     NATIVE_PLAYBACK_TIMEOUT_EXIT_CODE,
@@ -40,7 +40,7 @@ class ProcessSoundEffect(QObject):
 
     diagnostic = Signal(str)
 
-    def __init__(self, source_path: Path, parent=None, *, timeout_ms=None, _command_factory=None):
+    def __init__(self, source_path: Path, parent=None):
         super().__init__(parent)
         self.source_path = Path(source_path).resolve()
         self._volume = 1.0
@@ -51,14 +51,13 @@ class ProcessSoundEffect(QObject):
         self._cancel_reason = None
         self._deadline = None
         self._closing = False
-        self._command_factory = _command_factory or _playback_command
         duration_ms = 2000
         try:
             with wave.open(str(self.source_path), "rb") as source:
                 duration_ms = math.ceil(source.getnframes() * 1000 / source.getframerate())
         except (OSError, EOFError, wave.Error):
             pass  # The worker reports a missing or invalid source on playback.
-        self._timeout_ms = max(1, int(timeout_ms if timeout_ms is not None else duration_ms + 3000))
+        self._timeout_ms = duration_ms + 3000
 
         self._process = QProcess(self)
         self._process.setWorkingDirectory(str(PROJECT_ROOT))
@@ -119,7 +118,7 @@ class ProcessSoundEffect(QObject):
         self._cancel_reason = None
         self._child_pid = 0
         try:
-            program, arguments = self._command_factory(self.source_path, volume)
+            program, arguments = _playback_command(self.source_path, volume)
         except Exception as exc:
             self._emit_diagnostic("play_failed", reason="command_failed", error=exc)
             self._active_request = None
@@ -182,6 +181,6 @@ class ProcessSoundEffect(QObject):
         details["child_pid"] = self._child_pid
         details["backend"] = "winmm_process"
         audio_logger.info("stage_prompt_%s %s", event, details)
-        log_audio_status("stage_prompt", event, **details, **audio_thread_context(self))
+        log_audio_status("stage_prompt", event, **details)
         message = "; ".join(f"{key}={value}" for key, value in details.items())
         self.diagnostic.emit(f"[stage_prompt] {event}; {message}")

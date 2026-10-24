@@ -10,7 +10,6 @@ from PySide6.QtGui import QImage
 from PySide6.QtMultimedia import QMediaDevices, QSoundEffect
 
 from blink_call.core.audio_status_logging import (
-    audio_thread_context,
     configure_audio_status_logging,
     log_audio_status,
 )
@@ -266,23 +265,6 @@ class HomeViewModel(QObject):
     @Slot(dict)
     def on_infer_result(self, result):
         self.latest_infer_result = result
-        if (
-            result.get("blink_completed_step") is not None
-            or result.get("stage_sound_prompt_flag")
-            or result.get("blinck_call_flag")
-        ):
-            emitted_at = result.get("result_emitted_monotonic_s")
-            queue_delay_ms = None if emitted_at is None else round((time.monotonic() - emitted_at) * 1000, 3)
-            log_audio_status(
-                "stage_prompt",
-                "stage_result_received",
-                step=result.get("blink_completed_step"),
-                timestamp_ms=result.get("timestamp_ms"),
-                queue_delay_ms=queue_delay_ms,
-                sound_prompt=bool(result.get("stage_sound_prompt_flag")),
-                call=bool(result.get("blinck_call_flag")),
-                **audio_thread_context(self),
-            )
 
         self.blink_progress_updated.emit(
             {
@@ -293,8 +275,6 @@ class HomeViewModel(QObject):
             }
         )
         if bool(result.get("blinck_call_flag")):
-            if bool(result.get("stage_sound_prompt_flag")):
-                log_audio_status("stage_prompt", "play_skipped", reason="final_call_priority")
             self.start_or_reset_call_audio()
         elif bool(result.get("stage_sound_prompt_flag")):
             self.play_stage_prompt_sound()
