@@ -42,6 +42,7 @@ class BlinkCallController:
         ConfigBinder.bind_combo(self.vm, self.page.audio_file_combo, "blink_call.audio.file")
         ConfigBinder.bind_combo(self.vm, self.page.audio_duration_combo, "blink_call.audio.play_duration_s")
         ConfigBinder.bind_slider(self.vm, self.page.audio_volume_slider, "blink_call.audio.volume")
+        ConfigBinder.bind_slider(self.vm, self.page.stage_prompt_volume_slider, "blink_call.stage_prompt.volume")
 
         blink_call_group = QButtonGroup()
         blink_call_group.addButton(self.page.enabled_radio)
@@ -99,6 +100,8 @@ class BlinkCallController:
         self.page.add_step_btn.clicked.connect(self.on_add_step)
         self.page.audio_preview_btn.clicked.connect(self.on_preview_audio)
         self.page.audio_volume_slider.valueChanged.connect(self.update_audio_volume_text)
+        self.page.stage_prompt_volume_slider.valueChanged.connect(self.update_stage_prompt_volume_text)
+        self.page.stage_prompt_preview_btn.clicked.connect(self.on_preview_stage_prompt)
         self.page.model_btn.clicked.connect(lambda: self.model_files_manager.start_download_or_update(timeout_s=10.0))
 
         for idx, file_name in enumerate(self.audio_file_values, start=1):
@@ -173,6 +176,12 @@ class BlinkCallController:
         self.page.audio_volume_slider.blockSignals(False)
         self.update_audio_volume_text(self.page.audio_volume_slider.value())
 
+        stage_prompt_volume = int(self.vm.get_config("blink_call.stage_prompt.volume"))
+        self.page.stage_prompt_volume_slider.blockSignals(True)
+        self.page.stage_prompt_volume_slider.setValue(max(0, min(100, stage_prompt_volume)))
+        self.page.stage_prompt_volume_slider.blockSignals(False)
+        self.update_stage_prompt_volume_text(self.page.stage_prompt_volume_slider.value())
+
         for row in self.sequence_rows:
             row["widget"].deleteLater()
         self.sequence_rows.clear()
@@ -194,6 +203,8 @@ class BlinkCallController:
         self.page.progress_hide_radio.setText(i18n["hide"])
         self.page.sequence_label.setText(i18n["blink_sequence"])
         self.page.add_step_btn.setText(i18n["add_step"])
+        self.page.stage_prompt_volume_label.setText(i18n["stage_prompt_volume"])
+        self.page.stage_prompt_preview_btn.setText(i18n["preview"])
         self.page.audio_switch_label.setText(i18n["play_call_audio"])
         self.page.audio_on_radio.setText(i18n["on"])
         self.page.audio_off_radio.setText(i18n["off"])
@@ -387,8 +398,17 @@ class BlinkCallController:
     def stop_preview(self):
         self.preview_sound.stop()
 
+    def on_preview_stage_prompt(self):
+        self.preview_sound.stop()
+        self.preview_sound.set_source(get_resource_path("assets", "audio", "prompt.wav"))
+        self.preview_sound.set_volume(float(self.page.stage_prompt_volume_slider.value()) / 100.0)
+        self.preview_sound.play()
+
     def update_audio_volume_text(self, value: int):
         self.page.audio_volume_value_label.setText(f"{int(value)}%")
+
+    def update_stage_prompt_volume_text(self, value: int):
+        self.page.stage_prompt_volume_value_label.setText(f"{int(value)}%")
 
     def update_sequence_visibility(self, _value=None):
         enabled = bool(self.page.enabled_radio.isChecked())
@@ -398,6 +418,8 @@ class BlinkCallController:
         self.page.sequence_host.setVisible(enabled)
         self.page.add_step_btn.setVisible(enabled)
         self.page.sequence_divider.setVisible(enabled)
+        self.page.stage_prompt_volume_row.setVisible(enabled)
+        self.page.stage_prompt_volume_divider.setVisible(enabled)
         self.page.audio_switch_row.setVisible(enabled)
         self.page.audio_switch_divider.setVisible(enabled)
         self.update_audio_visibility()

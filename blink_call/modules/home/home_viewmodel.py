@@ -507,7 +507,7 @@ class HomeViewModel(QObject):
             log_audio_status("stage_prompt", "play_skipped", reason="blink_call_disabled")
             return
 
-        volume = int(self.setting_vm.get_config("blink_call.audio.volume"))
+        volume = int(self.setting_vm.get_config("blink_call.stage_prompt.volume"))
         volume = max(0, min(100, volume))
         self.stage_prompt_sound_player.set_volume(float(volume) / 100.0)
         audio_logger.info("stage_prompt_requested")

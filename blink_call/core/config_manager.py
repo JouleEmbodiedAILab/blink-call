@@ -36,6 +36,7 @@ class ConfigManager:
                     "volume": 100,
                     "play_duration_s": 60,
                 },
+                "stage_prompt": {"volume": 100},
                 "pattern": [
                     {"state": "open", "duration_s": 1.5, "sound_prompt": False},
                     {"state": "closed", "duration_s": 1.0, "sound_prompt": True},
@@ -70,6 +71,11 @@ class ConfigManager:
                 startup["enabled"] = False
                 startup["default_policy_version"] = STARTUP_DEFAULT_POLICY_VERSION
             merged = Helper.deep_merge_dict(default_config, local_config)
+            # Stage prompts previously shared the call audio volume. Preserve
+            # that level when upgrading until the user saves a separate volume.
+            local_blink_call = local_config.get("blink_call") or {}
+            if "volume" not in (local_blink_call.get("stage_prompt") or {}):
+                merged["blink_call"]["stage_prompt"]["volume"] = merged["blink_call"]["audio"]["volume"]
             # Lists replace the defaults during merging. Configurations saved
             # before stage prompts were introduced therefore have no per-step
             # switch at all. Apply the same defaults as a fresh installation,
