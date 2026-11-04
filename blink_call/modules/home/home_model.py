@@ -74,6 +74,12 @@ class HomeModel:
 
         return None
 
+    def on_camera_devices_changed(self):
+        if self.local_capture is not None:
+            self.local_capture.request_reconnect()
+        if self.service_server is not None:
+            self.service_server.capture.request_reconnect()
+
     def start_remote_capture(self, remote_ip: str, remote_port: int):
         if not self.stop_active_sources():
             return False

@@ -35,6 +35,7 @@ class LocalCameraCapture:
         reconnect_backoff_s=(0.5, 1.0, 2.0, 5.0),
         stop_timeout_s: float = 2.0,
         startup_timeout_s: float = 3.0,
+        recovery_stability_s: float = 0.5,
     ):
         self.camera_id = int(camera_id)
         self.interval = max(0.0, float(interval))
@@ -52,6 +53,7 @@ class LocalCameraCapture:
         self.reconnect_backoff_s = tuple(max(0.0, float(value)) for value in reconnect_backoff_s) or (0.5,)
         self.stop_timeout_s = max(0.0, float(stop_timeout_s))
         self.startup_timeout_s = max(0.0, float(startup_timeout_s))
+        self.recovery_stability_s = max(0.0, float(recovery_stability_s))
         # CAP_ANY normally selects MSMF on Windows. Some cameras open through
         # that backend but never deliver frames, so try DirectShow first and
         # rotate backends if an opened handle cannot produce its first frame.
@@ -82,6 +84,7 @@ class LocalCameraCapture:
         self._cap_lock = threading.Lock()
         self._lifecycle_lock = threading.Lock()
         self._stop_event = threading.Event()
+        self._reconnect_event = threading.Event()
         self._thread = None
 
     @property
@@ -139,6 +142,7 @@ class LocalCameraCapture:
                 return self.running
 
             self._stop_event.clear()
+            self._reconnect_event.clear()
             self.running = True
             self._clear_latest_frame()
             self._update_status(
@@ -167,6 +171,21 @@ class LocalCameraCapture:
         # ``state``/``camera_found`` and may become true after a later hot-plug.
         return True
 
+    def request_reconnect(self):
+        """Invalidate a handle after Windows reports a camera topology change.
+
+        A disconnected DirectShow handle can still return successful reads.
+        Only the capture thread releases it, including when a read is in flight.
+        """
+        if self.running and not self._stop_event.is_set():
+            self._reconnect_event.set()
+            camera_id = self.active_camera_id
+            self._mark_reconnecting(
+                self.camera_id if camera_id is None else camera_id,
+                "camera devices changed",
+            )
+            logger.info("camera_devices_changed primary_id=%s active_id=%s", self.camera_id, camera_id)
+
     def _capture_loop(self):
         target_camera_id = self.camera_id
         target_unavailable_since = None
@@ -181,6 +200,7 @@ class LocalCameraCapture:
 
         try:
             while not self._stop_event.is_set():
+                self._reconnect_event.clear()
                 open_attempt += 1
                 open_started_at = time.monotonic()
                 cap, open_error = self._open_camera(target_camera_id, open_attempt)
@@ -248,15 +268,47 @@ class LocalCameraCapture:
 
                 first_failure_at = None
                 frame_received_from_handle = False
+                handle_stable = False
+                recovery_started_at = None
                 first_frame_started_at = time.monotonic()
+                recovery_deadline_at = first_frame_started_at + max(
+                    self.startup_timeout_s, self.recovery_stability_s
+                )
                 try:
                     while not self._stop_event.is_set():
                         read_started_at = time.monotonic()
-                        ok, frame, read_error = self._read_camera(cap)
+                        if self._reconnect_event.is_set():
+                            ok, frame, read_error = False, None, "camera devices changed"
+                        else:
+                            ok, frame, read_error = self._read_camera(cap)
                         now = time.monotonic()
+
+                        if self._reconnect_event.is_set():
+                            outage_started_at = outage_started_at or read_started_at
+                            target_unavailable_since = target_unavailable_since or read_started_at
+                            if target_camera_id == self.camera_id:
+                                primary_unstable_since = primary_unstable_since or read_started_at
+                                primary_recovery_started_at = None
+                            self._mark_reconnecting(target_camera_id, "camera devices changed")
+                            break
 
                         if ok and frame is not None:
                             frame_received_from_handle = True
+                            recovery_started_at = recovery_started_at or now
+                            if not handle_stable and now - recovery_started_at < self.recovery_stability_s:
+                                # Sporadic frames must not flash in the preview or
+                                # reset the retry budget of a broken handle.
+                                if now >= recovery_deadline_at:
+                                    self._mark_reconnecting(
+                                        target_camera_id, "camera did not deliver a stable stream"
+                                    )
+                                    logger.warning("camera_stream_unstable camera_id=%s", target_camera_id)
+                                    break
+                                self._update_status(consecutive_failures=0)
+                                first_failure_at = None
+                                self._stop_event.wait(self.interval)
+                                continue
+                            handle_stable = True
                             if outage_started_at is not None:
                                 logger.info(
                                     "camera_recovered camera_id=%s outage_ms=%s backend=%s using_fallback=%s",
@@ -285,6 +337,7 @@ class LocalCameraCapture:
                             continue
 
                         outage_started_at = outage_started_at or read_started_at
+                        recovery_started_at = None
                         first_failure_at = first_failure_at or read_started_at
                         target_unavailable_since = target_unavailable_since or read_started_at
                         if target_camera_id == self.camera_id:
@@ -329,7 +382,9 @@ class LocalCameraCapture:
                 if self._stop_event.is_set():
                     break
 
-                if not frame_received_from_handle:
+                # A backend that delivered frames before the disconnect can
+                # still be unusable after hot-plug. Rotate on read failure too.
+                if not self._reconnect_event.is_set():
                     self._advance_backend(target_camera_id)
 
                 now = time.monotonic()
@@ -351,7 +406,7 @@ class LocalCameraCapture:
                         primary_unstable_since = now
                         primary_recovery_started_at = None
                     backoff_index = 0
-                elif not frame_received_from_handle:
+                else:
                     delay = self._get_retry_delay(
                         backoff_index,
                         target_unavailable_since,
@@ -421,17 +476,20 @@ class LocalCameraCapture:
 
     def _store_successful_frame(self, frame, camera_id, now):
         with self._frame_lock:
+            # A device notification may arrive between read() and publication.
+            if self._reconnect_event.is_set() or self._stop_event.is_set():
+                return
             self.latest_frame = frame
             self._latest_frame_at = now
-        self._update_status(
-            state=CaptureState.RUNNING,
-            camera_found=True,
-            active_camera_id=camera_id,
-            using_fallback=camera_id != self.camera_id,
-            consecutive_failures=0,
-            last_success_at=now,
-            last_error=None,
-        )
+            self._update_status(
+                state=CaptureState.RUNNING,
+                camera_found=True,
+                active_camera_id=camera_id,
+                using_fallback=camera_id != self.camera_id,
+                consecutive_failures=0,
+                last_success_at=now,
+                last_error=None,
+            )
 
     def _record_read_failure(self, error):
         with self._status_lock:
@@ -447,14 +505,16 @@ class LocalCameraCapture:
         )
 
     def _mark_reconnecting(self, camera_id, error):
-        self._update_status(
-            state=CaptureState.RECONNECTING,
-            camera_found=False,
-            active_camera_id=camera_id,
-            using_fallback=camera_id != self.camera_id,
-            last_error=error,
-        )
-        self._clear_latest_frame()
+        with self._frame_lock:
+            self.latest_frame = None
+            self._latest_frame_at = None
+            self._update_status(
+                state=CaptureState.RECONNECTING,
+                camera_found=False,
+                active_camera_id=camera_id,
+                using_fallback=camera_id != self.camera_id,
+                last_error=error,
+            )
 
     def _fallback_target_if_due(self, target_camera_id, unavailable_since, now):
         if not self.fallback_enabled or unavailable_since is None:

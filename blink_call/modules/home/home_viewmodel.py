@@ -78,6 +78,7 @@ class HomeViewModel(QObject):
         self.call_sound_player.diagnostic.connect(self.show_debug_msg.emit)
         self.audio_media_devices = QMediaDevices(self)
         self.audio_media_devices.audioOutputsChanged.connect(self._on_audio_outputs_changed)
+        self.audio_media_devices.videoInputsChanged.connect(self.model.on_camera_devices_changed)
         stage_prompt_player_type = ProcessSoundEffect if sys.platform == "win32" else RecoveringSoundEffect
         self.stage_prompt_sound_player = stage_prompt_player_type(
             get_resource_path("assets", "audio", "prompt.wav"),
@@ -507,7 +508,7 @@ class HomeViewModel(QObject):
             log_audio_status("stage_prompt", "play_skipped", reason="blink_call_disabled")
             return
 
-        volume = int(self.setting_vm.get_config("blink_call.stage_prompt.volume"))
+        volume = int(self.setting_vm.get_config("blink_call.audio.volume"))
         volume = max(0, min(100, volume))
         self.stage_prompt_sound_player.set_volume(float(volume) / 100.0)
         audio_logger.info("stage_prompt_requested")
