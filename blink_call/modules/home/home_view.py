@@ -1,7 +1,8 @@
+import logging
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QEvent, Qt, Signal
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QFrame,
@@ -14,12 +15,15 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from blink_call.core.audio_status_logging import log_audio_status
 from blink_call.core.navigation import Navigation
 from blink_call.modules.home.home_viewmodel import HomeViewModel
 from blink_call.modules.i18n import get_i18n
 from blink_call.modules.setting.setting_view import SettingView
 from blink_call.utils.helper import Helper
 from blink_call.widget import BlinkPatternProgressBar, InteractionBlockOverlay
+
+audio_logger = logging.getLogger("blink_call.audio")
 
 
 class HomeView(QWidget):
@@ -79,7 +83,8 @@ class HomeView(QWidget):
 
         self.call_close_btn = QPushButton("", self.call_block_overlay)
         self.call_close_btn.setObjectName("homeCallCloseBtn")
-        self.call_close_btn.clicked.connect(self.vm.stop_call_audio)
+        self.call_close_btn.clicked.connect(self.on_call_stop_clicked)
+        self.call_close_btn.installEventFilter(self)
 
         self.home_hint_box = QFrame(self)
         self.home_hint_box.setObjectName("homeModelFilesHint")
@@ -194,6 +199,26 @@ class HomeView(QWidget):
         if data["visibility"]:
             self.blink_progress_bar.set_pattern(data["pattern"])
             self.blink_progress_bar.set_progress_ratio(data["progress_ratio"])
+
+    def on_call_stop_clicked(self):
+        self.vm.stop_call_audio(reason="stop_button")
+
+    def eventFilter(self, watched, event):
+        if watched is self.call_close_btn and event.type() in {
+            QEvent.Type.MouseButtonPress,
+            QEvent.Type.MouseButtonRelease,
+            QEvent.Type.MouseButtonDblClick,
+            QEvent.Type.KeyPress,
+            QEvent.Type.KeyRelease,
+        }:
+            details = {"event_type": event.type().name, "spontaneous": event.spontaneous()}
+            if event.type() in {QEvent.Type.KeyPress, QEvent.Type.KeyRelease}:
+                details["key"] = event.key()  # No typed text or input from other widgets.
+            else:
+                details["button"] = event.button().name
+            audio_logger.info("call_stop_button_input %s", details)
+            log_audio_status("call_alert", "stop_button_input", **details)
+        return super().eventFilter(watched, event)
 
     def on_blink_call_alert_visibility(self, visible: bool):
         if not visible or self.is_service_mode:

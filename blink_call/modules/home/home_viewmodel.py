@@ -1,4 +1,5 @@
 import logging
+import math
 import sys
 import time
 from datetime import datetime
@@ -111,6 +112,9 @@ class HomeViewModel(QObject):
         self.ui_fps_counter = 0
         self.is_call_audio_playing = False
         self.blink_call_audio_requested = False
+        self._call_audio_request_sequence = 0
+        self._call_audio_last_requested_s = None
+        self._call_audio_stop_deadline_s = None
         self.auto_alarm_monitoring_active = False
         self.camera_missing_since_s = None
         self.face_missing_since_s = None
@@ -135,7 +139,7 @@ class HomeViewModel(QObject):
 
     def on_page_enter(self):
         self.auto_alarm_monitor_timer.stop()
-        self.stop_call_audio()
+        self.stop_call_audio(reason="page_enter")
         self._initialize_vars()
         self._record_audio_outputs("debug_session_started")
         self.stage_prompt_sound_player.stop()
@@ -254,7 +258,7 @@ class HomeViewModel(QObject):
         self.is_local_service_mode = True
         self._stop_auto_alarm_monitoring()
         self.stop_infer_worker()
-        self.stop_call_audio()
+        self.stop_call_audio(reason="local_service")
         self.local_service_status.emit(True)
         self.debug_mode_state.emit(False)
 
@@ -450,26 +454,84 @@ class HomeViewModel(QObject):
         if not isinstance(file_name, str) or not file_name.strip():
             log_audio_status("call_alert", "play_skipped", reason="audio_file_not_configured")
             return
+        self._call_audio_request_sequence += 1
+        self._call_audio_last_requested_s = time.monotonic()
         self.blink_call_audio_requested = True
         self._sync_call_alert_audio()
 
         duration_s = int(self.setting_vm.get_config("blink_call.audio.play_duration_s"))
         if duration_s > 0:
+            self._call_audio_stop_deadline_s = time.monotonic() + duration_s
             self.call_sound_stop_timer.start(duration_s * 1000)
-            log_audio_status("call_alert", "stop_timer_started", duration_s=duration_s)
+            log_audio_status(
+                "call_alert",
+                "stop_timer_started",
+                duration_s=duration_s,
+                sequence=self._call_audio_request_sequence,
+                timer_id=self.call_sound_stop_timer.timerId(),
+            )
         else:
+            self._call_audio_stop_deadline_s = None
             self.call_sound_stop_timer.stop()
             log_audio_status("call_alert", "stop_timer_disabled")
 
-    def stop_call_audio(self):
+    def _record_call_audio_stop(self, reason):
+        now = time.monotonic()
+        deadline = self._call_audio_stop_deadline_s
+        requested_at = self._call_audio_last_requested_s
+        remaining_ms = math.ceil((deadline - now) * 1000) if deadline is not None else None
+        request_age_ms = round((now - requested_at) * 1000) if requested_at is not None else None
+        details = {
+            "reason": reason,
+            "sequence": self._call_audio_request_sequence,
+            "requested": self.blink_call_audio_requested,
+            "request_age_ms": request_age_ms,
+            "deadline_remaining_ms": remaining_ms,
+            "qt_remaining_ms": self.call_sound_stop_timer.remainingTime(),
+            "timer_active": self.call_sound_stop_timer.isActive(),
+            "timer_id": self.call_sound_stop_timer.timerId(),
+        }
+        # Keep the origin and timing in the always-on log as well as opt-in
+        # diagnostics, before clearing the request or cancelling its timer.
+        audio_logger.info("call_alert_stop_requested %s", details)
+        log_audio_status("call_alert", "stop_requested", **details)
+
+    def stop_call_audio(self, *, reason="explicit_stop"):
+        self._record_call_audio_stop(reason)
         self.call_sound_stop_timer.stop()
+        self._call_audio_stop_deadline_s = None
         self.blink_call_audio_requested = False
         if self.auto_alarm_conditions:
             self.auto_alarm_silenced = True
         self._sync_call_alert_audio()
 
     def stop_blink_call_audio(self):
+        deadline = self._call_audio_stop_deadline_s
+        if not self.blink_call_audio_requested or deadline is None:
+            log_audio_status("call_alert", "stop_timer_ignored", reason="no_finite_call")
+            return
+        remaining_ms = math.ceil((deadline - time.monotonic()) * 1000)
+        if remaining_ms > 0:
+            # Windows may retain an old WM_TIMER after cancellation. If Qt
+            # reuses that timer ID, the old message can reach this callback for
+            # a newly started call. Coarse timers can also fire slightly early.
+            # The current request's monotonic deadline is authoritative.
+            audio_logger.info(
+                "call_alert_timer_deferred sequence=%s remaining_ms=%s",
+                self._call_audio_request_sequence,
+                remaining_ms,
+            )
+            log_audio_status(
+                "call_alert",
+                "stop_timer_deferred",
+                sequence=self._call_audio_request_sequence,
+                remaining_ms=remaining_ms,
+            )
+            self.call_sound_stop_timer.start(remaining_ms)
+            return
+        self._record_call_audio_stop("duration_timer")
         self.call_sound_stop_timer.stop()
+        self._call_audio_stop_deadline_s = None
         self.blink_call_audio_requested = False
         self._sync_call_alert_audio()
 
@@ -547,7 +609,7 @@ class HomeViewModel(QObject):
     def start_recording(self):
         self.is_recording_mode = True
         self._stop_auto_alarm_monitoring()
-        self.stop_call_audio()
+        self.stop_call_audio(reason="recording")
 
         self.blink_progress_updated.emit(
             {
@@ -622,7 +684,7 @@ class HomeViewModel(QObject):
         self.timer.stop()
         self._stop_auto_alarm_monitoring()
         self.stop_infer_worker()
-        self.stop_call_audio()
+        self.stop_call_audio(reason="application_shutdown")
         self.stage_prompt_sound_player.stop()
         self.close_recording_writer()
         self.model.stop_active_sources()
