@@ -97,8 +97,8 @@ After development is completed, the software can be built with Nuitka for standa
   ```
 
 Without a Windows computer, open **Actions → Build Windows release → Run workflow**
-on GitHub. The workflow builds the current branch on Windows, checks that the
-application opens, and uploads the ZIP, SHA-256 checksum, and source commit metadata
+on GitHub. The workflow builds the current branch on Windows, verifies the release
+package, and uploads the ZIP, SHA-256 checksum, and source commit metadata
 as the `BlinkCall-windows-x64` artifact. Build dependencies are listed in
 `scripts/windows/requirements-build.txt`. Local builds are written to
 `build/windows/setup_app.dist`.

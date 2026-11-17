@@ -189,7 +189,7 @@ powershell -ExecutionPolicy Bypass -File ./scripts/windows/build_nuitka.ps1
 ```
 
 没有 Windows 电脑时，可在 GitHub 打开 **Actions → Build Windows release → Run workflow**。
-工作流会在 Windows 环境构建当前分支、检查主程序能否打开，并将压缩包、SHA-256 校验码和源码提交信息
+工作流会在 Windows 环境构建当前分支、校验发布包，并将压缩包、SHA-256 校验码和源码提交信息
 上传到 `BlinkCall-windows-x64` 构建产物。构建依赖见 `scripts/windows/requirements-build.txt`；
 本地构建输出位于 `build/windows/setup_app.dist`。
 

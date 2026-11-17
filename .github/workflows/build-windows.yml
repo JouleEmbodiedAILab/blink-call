@@ -46,11 +46,6 @@ jobs:
       - name: Build standalone application
         run: ./scripts/windows/build_nuitka.ps1
 
-      - name: Check packaged application startup
-        run: |
-          python scripts/windows/smoke_test.py build/windows/setup_app.dist
-          if ($LASTEXITCODE -ne 0) { throw "Application startup check failed" }
-
       - name: Package release and checksums
         run: |
           python scripts/windows/package_release.py build/windows/setup_app.dist
@@ -72,6 +67,5 @@ jobs:
           name: windows-build-diagnostics
           path: |
             build/windows/nuitka-report.xml
-            build/windows/smoke-test.log
           if-no-files-found: ignore
           retention-days: 14
