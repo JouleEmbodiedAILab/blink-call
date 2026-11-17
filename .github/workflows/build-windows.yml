@@ -2,6 +2,11 @@ name: Build Windows release
 
 on:
   workflow_dispatch:
+    inputs:
+      publish_run_id:
+        description: 'Upload an existing successful build to its draft Release; leave empty to build'
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -12,6 +17,7 @@ concurrency:
 
 jobs:
   build:
+    if: inputs.publish_run_id == ''
     runs-on: windows-2022
     timeout-minutes: 90
     defaults:
@@ -69,3 +75,63 @@ jobs:
             build/windows/nuitka-report.xml
           if-no-files-found: ignore
           retention-days: 14
+
+  upload-draft:
+    if: inputs.publish_run_id != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      BUILD_RUN_ID: ${{ inputs.publish_run_id }}
+    steps:
+      - name: Download successful build
+        run: |
+          gh run view "$BUILD_RUN_ID" --json conclusion,headSha > build-run.json
+          gh run download "$BUILD_RUN_ID" --name BlinkCall-windows-x64 --dir release-files
+
+      - name: Verify release provenance and integrity
+        run: |
+          cd release-files
+          sha256sum --check SHA256SUMS.txt
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import subprocess
+          import zipfile
+
+          run = json.loads(Path('../build-run.json').read_text())
+          info = json.loads(Path('build-info.json').read_text())
+          if run['conclusion'] != 'success' or info['source_commit'] != run['headSha']:
+              raise SystemExit('Artifact does not match a successful source build.')
+          version = info['version']
+          if not re.fullmatch(r'\d+\.\d+\.\d+', version):
+              raise SystemExit('Invalid release version.')
+          with zipfile.ZipFile(f'BlinkCall-windows-x64-v{version}.zip') as archive:
+              if archive.testzip() is not None:
+                  raise SystemExit('Release ZIP integrity check failed.')
+              if archive.read('VERSION').decode().strip() != version:
+                  raise SystemExit('Packaged version does not match build metadata.')
+              if json.loads(archive.read('build-info.json')) != info:
+                  raise SystemExit('Packaged source metadata does not match the artifact.')
+          tag = f'v{version}'
+          release = json.loads(subprocess.check_output([
+              'gh', 'release', 'view', tag, '--json', 'isDraft,targetCommitish'
+          ], text=True))
+          if not release['isDraft'] or release['targetCommitish'] != info['source_commit']:
+              raise SystemExit('Draft Release does not match the build source.')
+          with open(os.environ['GITHUB_ENV'], 'a') as output:
+              output.write(f'RELEASE_TAG={tag}\n')
+          print(f"Verified {tag} from {info['source_commit']}; ZIP and SHA-256 checks passed.")
+          PY
+
+      - name: Upload files to draft Release
+        run: |
+          gh release upload "$RELEASE_TAG" \
+            "release-files/BlinkCall-windows-x64-$RELEASE_TAG.zip" \
+            release-files/SHA256SUMS.txt
