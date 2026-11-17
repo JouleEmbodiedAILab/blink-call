@@ -1,0 +1,77 @@
+name: Build Windows release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        with:
+          python-version: '3.10'
+          architecture: x64
+          cache: pip
+          cache-dependency-path: scripts/windows/requirements-build.txt
+
+      - name: Install build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if ($LASTEXITCODE -ne 0) { throw "pip upgrade failed" }
+          python -m pip install -r scripts/windows/requirements-build.txt
+          if ($LASTEXITCODE -ne 0) { throw "Dependency installation failed" }
+          python -m pip check
+          if ($LASTEXITCODE -ne 0) { throw "Dependency validation failed" }
+
+      - name: Check Python syntax
+        run: |
+          python -m compileall -q blink_call scripts/windows
+          if ($LASTEXITCODE -ne 0) { throw "Python syntax check failed" }
+
+      - name: Build standalone application
+        run: ./scripts/windows/build_nuitka.ps1
+
+      - name: Check packaged application startup
+        run: |
+          python scripts/windows/smoke_test.py build/windows/setup_app.dist
+          if ($LASTEXITCODE -ne 0) { throw "Application startup check failed" }
+
+      - name: Package release and checksums
+        run: |
+          python scripts/windows/package_release.py build/windows/setup_app.dist
+          if ($LASTEXITCODE -ne 0) { throw "Release packaging failed" }
+
+      - name: Upload release files
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: BlinkCall-windows-x64
+          path: dist/windows/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+      - name: Upload build diagnostics
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: windows-build-diagnostics
+          path: |
+            build/windows/nuitka-report.xml
+            build/windows/smoke-test.log
+          if-no-files-found: ignore
+          retention-days: 14
