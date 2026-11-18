@@ -45,8 +45,8 @@ Open [Troubleshooting](troubleshooting.md) to check the software, model files, c
 Choose any one of these download options:
 
 - [GitHub Latest Release](https://github.com/JouleEmbodiedAILab/blink-call/releases/latest)
-- [Baidu Netdisk](https://pan.baidu.com/s/1Og8-TmnR_yIdsOA2_MHyiw?pwd=fk35)
-- [Quark Netdisk](https://pan.quark.cn/s/e96254bb1153)
+- [Baidu Netdisk](https://pan.baidu.com/s/1VQ-mK599ZIQB7ieg1qBeiA?pwd=fre3)
+- [Quark Netdisk](https://pan.quark.cn/s/8902b755692f)
 
 Fully extract the downloaded package to a fixed location, then double-click `BlinkCall.exe` in the extracted folder. Do not run the software from inside the compressed package.
 
