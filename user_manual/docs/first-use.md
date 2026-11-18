@@ -29,8 +29,8 @@
 从下面任意一个地址下载最新的软件压缩包：
 
 - [GitHub 最新版本](https://github.com/JouleEmbodiedAILab/blink-call/releases/latest)
-- [百度网盘](https://pan.baidu.com/s/1Og8-TmnR_yIdsOA2_MHyiw?pwd=fk35)
-- [夸克网盘](https://pan.quark.cn/s/e96254bb1153)
+- [百度网盘](https://pan.baidu.com/s/1VQ-mK599ZIQB7ieg1qBeiA?pwd=fre3)
+- [夸克网盘](https://pan.quark.cn/s/8902b755692f)
 
 下载完成后：
 

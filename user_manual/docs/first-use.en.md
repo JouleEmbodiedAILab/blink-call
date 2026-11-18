@@ -29,8 +29,8 @@ Have the patient and caregiver complete the final test together.
 Download the latest software package from any one of these links:
 
 - [GitHub Latest Release](https://github.com/JouleEmbodiedAILab/blink-call/releases/latest)
-- [Baidu Netdisk](https://pan.baidu.com/s/1Og8-TmnR_yIdsOA2_MHyiw?pwd=fk35)
-- [Quark Netdisk](https://pan.quark.cn/s/e96254bb1153)
+- [Baidu Netdisk](https://pan.baidu.com/s/1VQ-mK599ZIQB7ieg1qBeiA?pwd=fre3)
+- [Quark Netdisk](https://pan.quark.cn/s/8902b755692f)
 
 After downloading:
 
