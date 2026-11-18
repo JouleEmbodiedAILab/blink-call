@@ -1,51 +1,82 @@
-# Advanced and Assistive Features
+# Advanced Settings and Technical Support
 
-This page introduces assistive settings that do not affect the main daily calling process.
+This page covers language, appearance, and the recording, logging, and restore-default options used for troubleshooting. Recording and debug mode are usually unnecessary for daily calls.
 
 ## Switch Language
 
-Path:
+Open:
 
-Settings -> General -> Language.
+**Settings → General → Language**
 
-You can switch between Chinese and English.
+Choose Chinese or English. Click **Save** to switch the interface to the selected language.
 
-## Switch Light or Dark Mode
+## Change Theme
 
-Path:
+Open:
 
-Settings -> General -> Light/Dark Mode.
+**Settings → General → Theme**
 
-You can choose a light or dark interface according to your preference. This setting only changes the appearance and does not affect the call function.
+Choose **Light** or **Dark**. This changes the appearance only and does not affect camera recognition or calling.
 
 ## Record Current Camera Data
 
-Path:
+This feature saves a recording of the current camera view to help developers or staff investigate recognition problems. It is not needed for ordinary daily use.
 
-Settings -> Other -> Record Current Camera Data.
+Open:
 
-This feature saves the current camera view. It is usually used by developers or staff members when they need to investigate recognition issues.
+**Settings → Others → Record current camera data**
 
-It is not needed for daily calling.
+To record:
 
-## Debug Mode and Logs
+1. Set the maximum recording duration.
+2. Select a local folder.
+3. Click **Start recording**.
+4. The software returns to the main screen and starts recording.
+5. To finish early, click the stop-recording button on the main screen.
 
-Path:
+!!! warning "Protect Patient Privacy"
+    A camera recording may contain the patient's face and surroundings. Obtain consent from the patient or guardian before recording or sharing. Do not upload sensitive footage directly to a public GitHub issue.
 
-Settings -> Other -> Debug Mode.
+## Enable Debug Mode and Logs
 
-This feature displays or saves software logs. It is usually used by developers or staff members when they need to investigate issues.
+Debug mode displays information about software operation. Enable it when staff need to examine recognition status or investigate a problem.
 
-When Debug Mode is enabled, the selected log folder also receives a separate `audio_status.log`. It records audio-output changes, the alert source and volume, load/play states, play requests, and stop events to help investigate a call that was triggered without sound. The file is rotated and keeps recent records.
+Open:
 
-It is not needed for daily calling.
+**Settings → Others → Debug mode**
 
-## Restore Default Settings
+To save the general debug log to a file:
 
-Path:
+1. Turn on **Debug mode**.
+2. Set **Save to local** to **Yes**.
+3. Choose the local log folder.
+4. Click **Save** and repeat the actions until the problem occurs again.
 
-Settings -> Other -> Restore Default Settings.
+When debug mode is enabled, the selected log folder also receives a separate `audio_status.log`. It records audio-output changes, the ringtone file and volume, load/play states, play requests, and stop events to help investigate a call that was triggered without sound. The file is rotated and keeps recent records.
 
-If the settings have become confusing, use this feature to restore the software's default configuration.
+After troubleshooting, you can turn off debug mode so technical information no longer remains on the main screen.
 
-After restoring the default settings, it is recommended to complete one test call again.
+## Restore Defaults
+
+If blink, camera, audio, or interface settings have become confusing, open:
+
+**Settings → Others → Restore defaults**
+
+After confirmation, the software restores the default configuration and closes the settings window.
+
+Restoring defaults does not delete downloaded model files. It resets the blink pattern, camera ID, audio, interface, and other settings. Check the camera and complete a test call afterwards.
+
+## Contact Staff or Developers
+
+Read [Troubleshooting](troubleshooting.md) before submitting a report.
+
+If the problem remains, report it through [GitHub Issues](https://github.com/JouleEmbodiedAILab/blink-call/issues) and include:
+
+- The software version and Windows version.
+- The actions taken before the problem occurred.
+- The complete message shown on the main screen.
+- What you expected and what actually happened.
+- Screenshots without sensitive information.
+- Logs, if staff specifically request them.
+
+Do not publicly upload camera recordings unless staff confirm they are needed and explain a safe way to transfer them.

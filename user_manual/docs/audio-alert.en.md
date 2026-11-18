@@ -1,53 +1,77 @@
 # Audio Alert
 
-Audio alert settings determine whether sound is played after a call is triggered, which ringtone is used, how long the sound plays, and whether a short prompt sound is played after a blink sequence step is completed.
+Audio settings determine whether calls ring, which ringtone is used, its volume and playback duration, and whether short cues play after blink steps.
 
-## Turn the Call Sound On or Off
+Open:
 
-Path:
+**Settings → Blink Call**
 
-Settings -> Blink Call -> Play Call Audio.
+After making changes, click **Save** and complete a test call.
 
-When enabled, the software plays an alert sound and shows the call alert screen after a call is triggered.
+## Enable Call Audio
 
-When disabled, the software will not play sound and will not show the call alert screen after a call is triggered.
+Set **Play call audio** to **On**.
 
-If the software is used for daily calling, it is recommended to keep this enabled.
+When enabled, completing the blink sequence plays the ringtone and displays the call alert.
 
-## Select a Ringtone
+When disabled, completing the sequence does not play the call ringtone or display the call alert. Keep it enabled for daily calls.
 
-You can choose different ringtones under [Call Audio File].
+## Select and Preview a Ringtone
 
-## Blink Sequence Step Prompt Sound
-![提示音](https://cdn.jsdelivr.net/gh/JouleEmbodiedAILab/blink-call@main/user_manual/docs/images/blink_sound.gif)
-In [Blink Sequence], each action step can have [Sound Prompt] enabled or disabled.
+1. Select a ringtone under **Call audio file**.
+2. Click **Preview**.
+3. Confirm that it can be heard through the computer or Bluetooth speaker.
+4. If needed, choose another ringtone and preview it again.
 
-When enabled, the software plays one short prompt sound after the patient completes the current eye-open or eye-closed step. This tells the patient that the current step is complete and they can continue with the next action.
-
-When disabled, no short prompt sound is played after that step is completed.
-
-This short prompt sound is separate from the ringtone played after a call is triggered. It is controlled by [Sound Prompt] for each action step.
-
-## Preview the Ringtone
-
-Click [Preview] to hear the selected ringtone before saving the settings.
+A successful preview confirms only that the sound device and ringtone can play. After saving, complete a full test call as well.
 
 ## Adjust the Volume
 
-You can adjust the call volume inside the software.
+The two sounds have separate volume controls:
 
-This changes the software volume for both the call ringtone and the blink sequence step prompt sound. It does not change the computer's system volume. Before daily use, make sure the computer or Bluetooth speaker volume is also set appropriately.
+- **Audio volume** controls the call ringtone and automatic abnormality alerts.
+- **Stage prompt volume** controls the short cue after each blink step. Click **Preview** next to it to check the cue separately.
+
+These controls do not change the Windows system volume. The sound you hear also depends on the computer speakers, Bluetooth speaker, and Windows volume settings.
+
+!!! tip
+    Preview the sounds at the patient's actual location. If the alert needs to be heard across rooms, have the caregiver check it from their usual location.
+
+![Set separate prompt volume, call audio, and automatic abnormality alerts](images/audio-set.jpg)
 
 ## Set the Playback Duration
 
-You can set how long the sound plays after a call is triggered.
+**Audio play duration** determines how long a call ringtone plays. Choose a fixed duration or **Unlimited**.
 
-If you want the alert to continue until a family member manually stops it, choose [Infinite].
+- With a fixed duration, the ringtone stops when the configured time is reached.
+- With **Unlimited**, it continues until the patient or caregiver clicks the red call alert button.
+
+Consider how long the caregiver usually needs to hear and respond to an alert.
 
 ## Alert When the Camera or Face Is Missing
 
-Turn on [Automatic Abnormality Alert] to set separate delays for a missing camera image and a face that cannot be detected. Both delays default to 5 minutes.
+Turn on **Automatic abnormality alert** to set separate delays for a camera without new frames and a face that remains undetected. Both delays default to 5 minutes.
 
-The alert uses the selected ringtone and software volume, and loops until the camera image or face detection recovers. Click the alert screen to silence it; it will not ring again until the current abnormal condition clears. This setting works independently of [Play Call Audio] and the normal call playback duration.
+The alert uses the selected ringtone and **Audio volume**, and loops continuously. The relevant alert stops automatically when the camera view or face detection recovers. To silence it manually, click the red alarm button labeled **Tap to silence**; it will not ring again until the current abnormal condition clears. This feature works independently of **Play call audio** and the normal call playback duration.
 
-![Set playback duration](https://cdn.jsdelivr.net/gh/JouleEmbodiedAILab/blink-call@main/user_manual/docs/images/audio-alert-settings.jpg)
+## Set Blink Step Prompt Sounds
+
+Each action under **Blink sequence** has a **Sound prompt** option.
+
+When enabled, the software plays a short cue after the patient completes that eye-open or eye-closed step, indicating that they can continue to the next action. This cue is different from the final call ringtone.
+
+Enable cues for key steps if watching the progress bar continuously is difficult. If the cues are distracting, disable them individually.
+
+![Play a short prompt after completing a blink step](images/blink_sound.gif)
+
+## Check After Saving
+
+After saving the settings, confirm that:
+
+1. **Preview** plays the ringtone.
+2. The software volume and Windows volume are appropriate.
+3. The Bluetooth speaker remains connected as the correct playback device.
+4. Completing a blink sequence displays the call alert and plays the ringtone.
+5. Clicking the red call alert button stops the ringtone early.
+
+If you cannot hear the alert, see [No Alert Sound](troubleshooting.md#no-sound).

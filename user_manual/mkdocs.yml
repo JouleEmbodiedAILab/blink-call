@@ -56,9 +56,12 @@ plugins:
           nav:
             - Home: index.md
             - Quick Start:
+                - Overview: quick-start.md
                 - First Use: first-use.md
                 - Daily Use: daily-use.md
+            - Troubleshooting: troubleshooting.md
             - Settings:
+                - Overview: settings.md
                 - Blink Pattern: blink-pattern.md
                 - Camera: camera.md
                 - Audio Alert: audio-alert.md
