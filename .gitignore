@@ -156,6 +156,7 @@ logs/
 .vscode/
 
 *.mp4
+!/user_manual/docs/images/quick_start.mp4
 # Test File
 scripts/monitor_resources.py
 # Local Windows watchdog chaos/recovery test (not versioned)
