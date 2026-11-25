@@ -124,6 +124,14 @@ https://github.com/user-attachments/assets/2579037f-2dea-4fcf-aa7d-e905464cd1be
 - [完整用户手册](https://JouleEmbodiedAILab.github.io/blink-call/)
 - [提交问题](https://github.com/JouleEmbodiedAILab/blink-call/issues)
 
+### 加入微信群
+
+欢迎加入用户反馈群，期待您的宝贵建议，助我们持续优化产品功能
+
+<p align="center">
+  <img src="assets/images/wechat-group-qr.png" width="360" alt="眨眼呼叫微信群二维码"/>
+</p>
+
 ## 开发者指南
 
 以下内容面向希望从源码运行、修改或打包软件的开发者。普通用户无需执行这些命令。

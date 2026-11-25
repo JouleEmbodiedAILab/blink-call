@@ -42,6 +42,14 @@ If you want to get started quickly, begin here:
 > [!NOTE]
 > Currently, the software is only available for direct download and use on Windows.
 
+### 💬 WeChat Group
+
+Join our user feedback group! We welcome your valuable suggestions to help us continually improve the product's features.
+
+<p align="center">
+  <img src="assets/images/wechat-group-qr.png" width="360" alt="WeChat group QR code for Blink Call"/>
+</p>
+
 ---
 
 ## 🔧 For Developer
